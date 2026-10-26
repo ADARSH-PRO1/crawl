@@ -1,0 +1,7 @@
+# Crawl-only hosted build (Streamlit Community Cloud). The browser agent (browser-use) is intentionally not installed:
+# a hosted server cannot reach askg1, and the agent needs it. Local full install: see pyproject.toml / README.
+crawl4ai==0.9.5
+streamlit>=1.40
+httpx>=0.27
+beautifulsoup4>=4.12
+python-dotenv>=1.0

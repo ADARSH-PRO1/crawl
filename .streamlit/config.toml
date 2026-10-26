@@ -1,0 +1,6 @@
+[server]
+headless = true
+
+[browser]
+# Telemetry off (guide Step 6 spirit): Streamlit's own usage statistics too.
+gatherUsageStats = false
