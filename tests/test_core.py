@@ -175,3 +175,12 @@ def test_session_refused_unless_enabled(monkeypatch):
     monkeypatch.setenv("CRAWL_COOKIES", "sid=xyz")
     with pytest.raises(config.ConfigError):
         load_session("x.com")
+
+
+def test_clean_markdown_drops_json_blob_and_widget_text():
+    from app.crawl import clean_markdown
+    blob = '{"docsConfig":' + ('"a":"b",' * 400) + '}'
+    md = f"Assistant\nResponses are generated using AI and may contain mistakes.\n# Title\nCopy pageCopy page\nBody text.\n\n\n\n{blob}\n"
+    out = clean_markdown(md)
+    assert out == "# Title\nBody text."
+    assert clean_markdown("Use `{...}` in code\n" + '{"x":1}') == 'Use `{...}` in code\n{"x":1}'  # short JSON kept

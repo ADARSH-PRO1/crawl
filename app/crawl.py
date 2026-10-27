@@ -130,6 +130,25 @@ def page_title(result, markdown: str) -> str:
     return m.group(1).strip() if m else result.url
 
 
+UI_BOILERPLATE = {"Assistant", "Responses are generated using AI and may contain mistakes.",  # docs chat widget
+                  "Was this page helpful?", "YesNo"}  # repeated feedback footer
+COPY_PAGE_RE = re.compile(r"^(Copy page)+$")  # "Copy page" buttons render as repeated text
+
+
+def clean_markdown(md: str) -> str:
+    """Drop what is not page content: embedded framework JSON blobs (one huge line, e.g. Mintlify/Next.js data),
+    docs chat-widget text and 'Copy page' buttons. PDF 7e asks for clean Markdown."""
+    kept = []
+    for line in md.split("\n"):
+        s = line.strip()
+        if len(s) > 2000 and s[0] in "{[" and s.count('":') >= 20:
+            continue
+        if s in UI_BOILERPLATE or COPY_PAGE_RE.match(s):
+            continue
+        kept.append(line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+
+
 def markdown_of(result) -> str:
     md = result.markdown
     return (getattr(md, "raw_markdown", None) or str(md or "")).strip()
@@ -286,7 +305,7 @@ async def crawl_site(url: str, max_pages: int | None = None, max_depth: int | No
         if not result.success:
             skipped.append({"url": result.url, "reason": classify_failure(result)})
         else:
-            md = markdown_of(result)
+            md = clean_markdown(markdown_of(result))
             ctype = ((result.response_headers or {}).get("content-type") or "text/html").lower()
             if "html" not in ctype:
                 skipped.append({"url": result.url, "reason": f"non_html ({ctype.split(';')[0]})"})
