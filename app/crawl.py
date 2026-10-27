@@ -203,7 +203,9 @@ async def _docker_results(url: str, pages_cap: int, depth: int, host: str, sessi
     """Deep crawl through the container's /crawl/stream (NDJSON, one result per page as it completes)."""
     payload = {
         "urls": [url],
-        "browser_config": {"type": "BrowserConfig", "params": {"headless": True, "storage_state": session}},
+        # The service rejects a storage_state field on untrusted requests, so it is sent only for a session crawl.
+        "browser_config": {"type": "BrowserConfig",
+                           "params": {"headless": True, **({"storage_state": session} if session else {})}},
         "crawler_config": {"type": "CrawlerRunConfig", "params": {
             "cache_mode": "bypass", "check_robots_txt": True, "stream": True,
             "excluded_tags": _excluded_tags(session),

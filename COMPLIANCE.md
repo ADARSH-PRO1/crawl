@@ -25,7 +25,7 @@ Status: OK = enforced/verified in this repo, DEV = documented deviation, YOU = m
 | 6 Browser Use agent | OK | `ChatOpenAI` + askg1 base URL, `temperature=0`, `use_vision=False`, step cap. Default 15 steps (matches PDF), cap 30 |
 | 7a-b Crawl4AI, robots.txt | OK | `check_robots_txt=True`, same-host only, low concurrency |
 | 7c Extraction with askg1 | DEV | Own chunked summarizer (`app/extract.py`) instead of `LLMExtractionStrategy`; askg1 only, fits 4096 |
-| 7d Docker service | OK | `unclecode/crawl4ai:latest`, auto-detected via `/health`, token set |
+| 7d Docker service | OK | `unclecode/crawl4ai:latest`, token set, auto-detected via `/health`. Verified 2026-10-27: `CRAWL_BACKEND=docker` crawl of docs.browser-use.com (PDF 7e job) = 10 pages in 15.3 s, vs 22 s to 232 s with the in-process library. |
 | 7e Crawl job output | OK | `docs_md/*.md` + `index.json` (url, title, file), nav and footers removed (default) |
 | uv only | OK | `.venv` was created by uv 0.12.10 |
 
