@@ -16,8 +16,8 @@ Status: OK = enforced/verified in this repo, DEV = documented deviation, YOU = m
 ## Steps
 | Step | Status | Notes |
 |---|---|---|
-| 1 askg1 reachable (`/models`, chat, tool calling, 20k+) | YOU / DEV | `scripts/verify_askg1.py` exists. On 2026-10-27 18:30 `GET /models` to `100.64.0.2:8080` timed out (VPN down?), so it is unverified. Real window is 4096, not 20,000 (see DEV below) |
-| 2-5 BrowserOS install, provider, MCP, first tests | YOU | Not code. Step 5 tasks (HN, GitHub topics) can be run through `browse` mode once askg1 is reachable |
+| 1 askg1 reachable (`/models`, chat, tool calling, 20k+) | OK / DEV | `verify_askg1.py` 2026-10-27 18:41 against `100.64.0.2:8080`, model `g1-chat`: /models, completion, tool calling and structured output PASS; 4k context PASS. **FAIL: 16k probe (HTTP 500, server context is 4096) and the 20k check.** Real window is 4096, not 20,000 (see DEV below). Lead should know. |
+| 2-5 BrowserOS install, provider, MCP, first tests | YOU / FAIL | BrowserOS is not installed on this machine (no install dir, nothing on port 9200). Step 5 test 1 (Hacker News top story) run through our `browse` mode on 2026-10-27: **did not pass** in 2 runs (run 1 gave up with `success=false`; run 2 looped 17 steps with no answer). The 4096-token model emits invalid actions (e.g. `click` index 0). The PDF warns agents loop below ~15k context. Needs lead decision (raise askg1 context). |
 | 6 Browser Use agent | OK | `ChatOpenAI` + askg1 base URL, `temperature=0`, `use_vision=False`, step cap. Default 15 steps (matches PDF), cap 30 |
 | 7a-b Crawl4AI, robots.txt | OK | `check_robots_txt=True`, same-host only, low concurrency |
 | 7c Extraction with askg1 | DEV | Own chunked summarizer (`app/extract.py`) instead of `LLMExtractionStrategy`; askg1 only, fits 4096 |

@@ -92,7 +92,8 @@ async def run_agent(args, result: dict) -> None:
         result["hint"] = ("Prompt exceeded askg1's 4096-token window. Use a simpler page/task, lower "
                           "ASKG1_DOM_CHARS, or ask the lead to raise the server context size.")
 
-    result["ok"] = bool(raw) and result["done"]
+    # The agent can call done(success=False) to give up; that must not be reported as a successful run.
+    result["ok"] = bool(raw) and result["done"] and hist.is_successful() is not False
 
 
 async def run_crawl(args, result: dict) -> None:
