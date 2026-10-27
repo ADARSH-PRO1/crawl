@@ -127,7 +127,7 @@ def page_title(result, markdown: str) -> str:
     if title:
         return title
     m = re.search(r"^#\s+(.+)$", markdown, re.M)
-    return m.group(1).strip() if m else result.url
+    return re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", m.group(1)).strip() if m else result.url  # drop link markup
 
 
 UI_BOILERPLATE = {"Assistant", "Responses are generated using AI and may contain mistakes.",  # docs chat widget

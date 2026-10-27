@@ -184,3 +184,11 @@ def test_clean_markdown_drops_json_blob_and_widget_text():
     out = clean_markdown(md)
     assert out == "# Title\nBody text."
     assert clean_markdown("Use `{...}` in code\n" + '{"x":1}') == 'Use `{...}` in code\n{"x":1}'  # short JSON kept
+
+
+def test_page_title_strips_link_markup():
+    from types import SimpleNamespace
+    from app.crawl import page_title
+    r = SimpleNamespace(metadata={}, url="https://a.com/")
+    assert page_title(r, "#  [Quotes to Scrape](https://a.com/)\ntext") == "Quotes to Scrape"
+    assert page_title(r, "no heading") == "https://a.com/"
