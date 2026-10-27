@@ -287,6 +287,7 @@ async def crawl_site(url: str, max_pages: int | None = None, max_depth: int | No
     pages: list[dict] = []
     skipped: list[dict] = []
     used: set[str] = set()
+    saved_urls: set[str] = set()  # real (post-redirect) addresses already saved, to skip redirect duplicates
     seen = 0
 
     def log(msg: str) -> None:
@@ -309,8 +310,12 @@ async def crawl_site(url: str, max_pages: int | None = None, max_depth: int | No
         else:
             md = clean_markdown(markdown_of(result))
             ctype = ((result.response_headers or {}).get("content-type") or "text/html").lower()
-            if "html" not in ctype:
+            redirected = final_url.rstrip("/") != result.url.rstrip("/")
+            # After a redirect the headers are those of the redirect hop (often text/plain), not of the page.
+            if "html" not in ctype and not (redirected and md):
                 skipped.append({"url": result.url, "reason": f"non_html ({ctype.split(';')[0]})"})
+            elif (final_url if redirected else result.url) in saved_urls:
+                skipped.append({"url": result.url, "reason": f"duplicate of {final_url}"})
             elif not md:
                 skipped.append({"url": result.url, "reason": "empty_page"})
             elif looks_login(md):
@@ -320,11 +325,13 @@ async def crawl_site(url: str, max_pages: int | None = None, max_depth: int | No
                 skipped.append({"url": result.url, "reason": "blocked_by_site (CAPTCHA / bot wall detected; not bypassed)"})
             else:
                 md = md[:CRAWL_MAX_PAGE_CHARS]
-                fname = f"{slugify(result.url, used)}.md"
-                (md_dir / fname).write_text(f"<!-- source: {result.url} -->\n\n{md}\n", encoding="utf-8")
-                pages.append({"url": result.url, "title": page_title(result, md), "file": f"docs_md/{fname}",
+                page_url = final_url if redirected else result.url  # index the page's real address
+                saved_urls.add(page_url)
+                fname = f"{slugify(page_url, used)}.md"
+                (md_dir / fname).write_text(f"<!-- source: {page_url} -->\n\n{md}\n", encoding="utf-8")
+                pages.append({"url": page_url, "title": page_title(result, md), "file": f"docs_md/{fname}",
                               "words": len(md.split()), "depth": (result.metadata or {}).get("depth", 0)})
-                log(f"{seen}/{pages_cap} ok {result.url} ({pages[-1]['words']} words)")
+                log(f"{seen}/{pages_cap} ok {page_url} ({pages[-1]['words']} words)")
                 return
         log(f"{seen}/{pages_cap} skipped {result.url}: {skipped[-1]['reason']}")
 
