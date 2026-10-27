@@ -17,7 +17,10 @@ Status: OK = enforced/verified in this repo, DEV = documented deviation, YOU = m
 | Step | Status | Notes |
 |---|---|---|
 | 1 askg1 reachable (`/models`, chat, tool calling, 20k+) | OK / DEV | `verify_askg1.py` 2026-10-27 18:41 against `100.64.0.2:8080`, model `g1-chat`: /models, completion, tool calling and structured output PASS; 4k context PASS. **FAIL: 16k probe (HTTP 500, server context is 4096) and the 20k check.** Real window is 4096, not 20,000 (see DEV below). Lead should know. |
-| 2-5 BrowserOS install, provider, MCP, first tests | YOU / FAIL | BrowserOS is not installed on this machine (no install dir, nothing on port 9200). Step 5 test 1 (Hacker News top story) run through our `browse` mode on 2026-10-27: **did not pass** in 2 runs (run 1 gave up with `success=false`; run 2 looped 17 steps with no answer). The 4096-token model emits invalid actions (e.g. `click` index 0). The PDF warns agents loop below ~15k context. Needs lead decision (raise askg1 context). |
+| 2 BrowserOS install | OK | BrowserOS neo installed 2026-10-27 from browseros.com, fresh profile (no Chrome import). MCP endpoint is `http://127.0.0.1:9010/mcp` on this build (PDF says 9200). |
+| 3 BrowserOS provider = askg1 | BLOCKED | Not possible in this build: `chrome://browseros/settings` gives ERR_INVALID_URL, `chrome://settings/browseros-ai` falls back to generic browser settings, and searching settings for "provider" / "browseros" finds no AI provider setting. neo has only "Ask for human help" and "tab group cleanup tip". Needs lead decision (older BrowserOS build with the OpenAI Compatible card?). |
+| 4 MCP agents | OK | Setup auto-connected Claude Code, Codex, Cursor and VS Code; all four were disconnected (0 of 4 connected). PDF: only connect agents configured for askg1. |
+| 5 BrowserOS first tests | BLOCKED | Needs Step 3. Same tasks were run through our own `browse` mode and did not pass (see Step 6 note: 4096-token model emits invalid actions). |
 | 6 Browser Use agent | OK | `ChatOpenAI` + askg1 base URL, `temperature=0`, `use_vision=False`, step cap. Default 15 steps (matches PDF), cap 30 |
 | 7a-b Crawl4AI, robots.txt | OK | `check_robots_txt=True`, same-host only, low concurrency |
 | 7c Extraction with askg1 | DEV | Own chunked summarizer (`app/extract.py`) instead of `LLMExtractionStrategy`; askg1 only, fits 4096 |
