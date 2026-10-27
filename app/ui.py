@@ -78,9 +78,10 @@ def build_cmd(mode: str, url: str, prompt: str, steps: int, headless: bool, exte
     return cmd
 
 
-def run_subprocess(cmd: list[str], log_box, timeout_s: int = RUN_TIMEOUT_S) -> tuple[dict | None, list[str]]:
+def run_subprocess(cmd: list[str], log_box, timeout_s: int = RUN_TIMEOUT_S,
+                   extra_env: dict | None = None) -> tuple[dict | None, list[str]]:
     """Stream the runner's output live; returns (RESULT_JSON payload, log lines)."""
-    env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
+    env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", **(extra_env or {})}
     proc = subprocess.Popen(
         cmd, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace", bufsize=1,
@@ -139,8 +140,12 @@ def show_crawl(result: dict) -> None:
     m2.metric("Skipped", len(skipped))
     m3.metric("Crawl time (s)", result.get("crawl_seconds", "-"))
     m4.metric("Words", sum(p.get("words", 0) for p in pages))
+    if result.get("authenticated"):
+        st.caption("Crawled with a logged-in session.")
     if result.get("timed_out"):
         st.warning("The crawl hit its time budget; partial results are shown.")
+    if any(str(sk.get("reason", "")).startswith("login_required") for sk in skipped):
+        st.warning("Some pages are behind a login. Provide a session under 'Logged-in site' and run again.")
     if pages:
         st.subheader("Crawled pages (index.json)")
         st.dataframe([{k: p[k] for k in ("url", "title", "file", "words", "depth")} for p in pages],
@@ -229,6 +234,11 @@ with st.form("task"):
         headless = c1.toggle("Headless browser", value=True)
         steps = c2.slider("Max steps", 1, 10, 8)
         external = c3.toggle("Allow leaving the start domain", value=False)
+    with st.expander("Logged-in site (optional, crawl mode)"):
+        st.caption("For apps behind a login. Create the file once with scripts/save_session.py, or paste a Cookie header. "
+                   "Only cookies/localStorage for the target host are used; nothing is stored.")
+        state_file = st.file_uploader("Playwright storage-state JSON", type=["json"])
+        cookie_header = st.text_input("...or Cookie header (name=value; name2=value2)", type="password")
     submitted = st.form_submit_button("Run", type="primary")
 
 if submitted:
@@ -236,14 +246,20 @@ if submitted:
         st.warning("Enter a URL.")
         st.stop()
     cmd = build_cmd(mode, url.strip(), prompt, steps, headless, external, max_pages, max_depth, summarize)
+    session_env = {}
+    if mode == "crawl":
+        if state_file is not None:
+            session_env["CRAWL_STORAGE_STATE"] = state_file.getvalue().decode("utf-8", errors="replace")
+        if cookie_header.strip():
+            session_env["CRAWL_COOKIES"] = cookie_header.strip()
     timeout_s = (CRAWL_TOTAL_TIMEOUT_S + 120 + (360 if summarize else 0)) if mode == "crawl" else RUN_TIMEOUT_S
     with st.expander("Live log", expanded=True):
         log_box = st.empty()
         with st.spinner("Running..."):
-            result, lines = run_subprocess(cmd, log_box, timeout_s)
+            result, lines = run_subprocess(cmd, log_box, timeout_s, session_env)
     request = {"mode": mode, "url": url, "prompt": prompt, "max_steps": steps,
                "headless": headless, "allow_external": external, "max_pages": max_pages,
-               "max_depth": max_depth, "summarize": summarize}
+               "max_depth": max_depth, "summarize": summarize, "authenticated": bool(session_env)}
     if result is None:
         st.error("The runner exited without a result. See the log above.")
         save_run(mode, request, None, lines)

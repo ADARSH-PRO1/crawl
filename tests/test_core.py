@@ -114,3 +114,55 @@ def test_system_prompt_is_small_and_lists_only_allowed_actions():
     assert config.estimate_tokens(tasks.SYSTEM_PROMPT) < 400
     assert "extract" not in tasks.ALLOWED_ACTIONS
     json.dumps(sorted(tasks.ALLOWED_ACTIONS))
+
+
+def test_looks_login():
+    from app.crawl import looks_login
+    assert looks_login("# Log in\nEmail*\nPassword*\nLog in")
+    assert not looks_login("word " * 300 + " password log in")  # long docs page mentioning passwords
+    assert not looks_login("# Find people\nName contains")
+
+
+def test_load_session_scopes_to_host(monkeypatch):
+    from app.crawl import load_session
+    monkeypatch.delenv("CRAWL_STORAGE_STATE_FILE", raising=False)
+    monkeypatch.setenv("CRAWL_STORAGE_STATE", json.dumps({
+        "cookies": [{"name": "a", "value": "1", "domain": "app.example.com", "path": "/"},
+                    {"name": "b", "value": "2", "domain": "evil.com", "path": "/"}],
+        "origins": [{"origin": "https://app.example.com", "localStorage": []},
+                    {"origin": "https://other.com", "localStorage": []}]}))
+    monkeypatch.setenv("CRAWL_COOKIES", "sid=xyz; theme=dark")
+    s = load_session("app.example.com")
+    assert [c["name"] for c in s["cookies"]] == ["a", "sid", "theme"]
+    assert [o["origin"] for o in s["origins"]] == ["https://app.example.com"]
+
+
+def test_load_session_none_when_unset(monkeypatch):
+    from app.crawl import load_session
+    for k in ("CRAWL_STORAGE_STATE", "CRAWL_STORAGE_STATE_FILE", "CRAWL_COOKIES"):
+        monkeypatch.delenv(k, raising=False)
+    assert load_session("x.com") is None
+
+
+def test_unsafe_url_filter():
+    from crawl4ai.deep_crawling import URLPatternFilter
+    from app.crawl import UNSAFE_URL_GLOBS
+    f = URLPatternFilter(UNSAFE_URL_GLOBS, use_glob=True, reverse=True)
+    for u in ("https://a.com/logout", "https://a.com/auth/google", "https://a.com/api/samples/people", "https://a.com/sign-out"):
+        assert not f.apply(u), u
+    for u in ("https://a.com/inbox?folder=activity", "https://a.com/sequences/new", "https://a.com/blog/catalog"):
+        assert f.apply(u), u
+
+
+def test_distinct_titles(tmp_path):
+    from app.crawl import distinct_titles
+    d = tmp_path / "docs_md"
+    d.mkdir()
+    (d / "a.md").write_text("<!-- x -->\n\n# Home page\ntext", encoding="utf-8")
+    (d / "b.md").write_text("no heading here", encoding="utf-8")
+    (d / "c.md").write_text("# Solo", encoding="utf-8")
+    pages = [{"url": "https://a.com/home", "title": "App", "file": "docs_md/a.md"},
+             {"url": "https://a.com/tasks", "title": "App", "file": "docs_md/b.md"},
+             {"url": "https://a.com/x", "title": "Unique", "file": "docs_md/c.md"}]
+    distinct_titles(pages, d)
+    assert [p["title"] for p in pages] == ["Home page", "tasks", "Unique"]

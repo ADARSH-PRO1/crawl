@@ -6,3 +6,4 @@ __pycache__/
 .streamlit/secrets.toml
 # Reports, crawl output and run logs stay local: they contain internal endpoints and crawled content.
 reports/
+session*.json
