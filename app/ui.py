@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT))  # `streamlit run app/ui.py` only puts app/ on sys
 
 import streamlit as st  # noqa: E402
 
-from app.config import (CRAWL_OUT_DIR, CRAWL_TOTAL_TIMEOUT_S, DEFAULT_CRAWL_PAGES, MAX_CRAWL_PAGES,  # noqa: E402
+from app.config import (ALLOW_SESSION, CRAWL_OUT_DIR, CRAWL_TOTAL_TIMEOUT_S, DEFAULT_CRAWL_PAGES, MAX_CRAWL_PAGES,  # noqa: E402
                         ConfigError, SETTINGS)  # noqa: F401  (importing config fails fast on forbidden keys)
 
 RUNS_DIR = ROOT / "reports" / "runs"
@@ -232,13 +232,15 @@ with st.form("task"):
         prompt = st.text_area("Instruction", prompt, height=80)
         c1, c2, c3 = st.columns(3)
         headless = c1.toggle("Headless browser", value=True)
-        steps = c2.slider("Max steps", 1, 10, 8)
+        steps = c2.slider("Max steps", 1, 30, 15)
         external = c3.toggle("Allow leaving the start domain", value=False)
-    with st.expander("Logged-in site (optional, crawl mode)"):
-        st.caption("For apps behind a login. Create the file once with scripts/save_session.py, or paste a Cookie header. "
-                   "Only cookies/localStorage for the target host are used; nothing is stored.")
-        state_file = st.file_uploader("Playwright storage-state JSON", type=["json"])
-        cookie_header = st.text_input("...or Cookie header (name=value; name2=value2)", type="password")
+    state_file, cookie_header = None, ""
+    if ALLOW_SESSION:  # local opt-in only (ALLOW_SESSION=1); not in the PDF, so off by default
+        with st.expander("Logged-in site (optional, crawl mode, local use with a TEST account only)"):
+            st.caption("Create the file once with scripts/save_session.py, or paste a Cookie header. "
+                       "Only cookies/localStorage for the target host are used; nothing is stored.")
+            state_file = st.file_uploader("Playwright storage-state JSON", type=["json"])
+            cookie_header = st.text_input("...or Cookie header (name=value; name2=value2)", type="password")
     submitted = st.form_submit_button("Run", type="primary")
 
 if submitted:

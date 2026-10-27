@@ -82,8 +82,13 @@ def load_session(host: str) -> dict | None:
     raw = os.environ.get("CRAWL_STORAGE_STATE", "").strip()
     path = os.environ.get("CRAWL_STORAGE_STATE_FILE", "").strip()
     cookie_header = os.environ.get("CRAWL_COOKIES", "").strip()
-    if not raw and path:
+    if not cfg.ALLOW_SESSION and not (raw or path or cookie_header):
+        return None
+    if not raw and path and cfg.ALLOW_SESSION:
         raw = Path(path).read_text(encoding="utf-8")
+    if (raw or path or cookie_header) and not cfg.ALLOW_SESSION:
+        raise cfg.ConfigError("Authenticated crawling is disabled (not part of the approved setup). "
+                              "For local test accounts only, set ALLOW_SESSION=1.")
     state: dict = {"cookies": [], "origins": []}
     if raw:
         try:

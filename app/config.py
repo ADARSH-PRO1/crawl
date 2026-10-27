@@ -28,8 +28,14 @@ FORBIDDEN_KEYS = [
 
 # askg1 is served with a hard 4096-token window (verified in Block B). Override only if the lead raises it.
 DEFAULT_CONTEXT_TOKENS = 4096
-DEFAULT_MAX_STEPS = 8
-MAX_STEPS_CAP = 10
+# PDF Step 6 uses max_steps=15. Latency does not matter here and the 4096-token window forces tiny steps, so more
+# steps are the way to finish a task; the cap still stops a confused agent from looping forever.
+DEFAULT_MAX_STEPS = 15
+MAX_STEPS_CAP = 30
+
+# Authenticated crawling is NOT part of the PDF (it says: no login bypassing, test accounts only, keep data local).
+# It exists only as an explicit, local opt-in: ALLOW_SESSION=1. Never enable it on a hosted deployment.
+ALLOW_SESSION = os.environ.get("ALLOW_SESSION") == "1"
 
 # Crawl limits (PDF: "keep crawl rates low"). The head may enter any site, so caps are hard, not advisory.
 # Without askg1 we are on a small shared host (little RAM), so the default cap is lower; override with CRAWL_MAX_PAGES_CAP.

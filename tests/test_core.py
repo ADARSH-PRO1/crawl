@@ -125,6 +125,7 @@ def test_looks_login():
 
 def test_load_session_scopes_to_host(monkeypatch):
     from app.crawl import load_session
+    monkeypatch.setattr("app.config.ALLOW_SESSION", True)
     monkeypatch.delenv("CRAWL_STORAGE_STATE_FILE", raising=False)
     monkeypatch.setenv("CRAWL_STORAGE_STATE", json.dumps({
         "cookies": [{"name": "a", "value": "1", "domain": "app.example.com", "path": "/"},
@@ -166,3 +167,11 @@ def test_distinct_titles(tmp_path):
              {"url": "https://a.com/x", "title": "Unique", "file": "docs_md/c.md"}]
     distinct_titles(pages, d)
     assert [p["title"] for p in pages] == ["Home page", "tasks", "Unique"]
+
+
+def test_session_refused_unless_enabled(monkeypatch):
+    from app.crawl import load_session
+    monkeypatch.setattr("app.config.ALLOW_SESSION", False)
+    monkeypatch.setenv("CRAWL_COOKIES", "sid=xyz")
+    with pytest.raises(config.ConfigError):
+        load_session("x.com")

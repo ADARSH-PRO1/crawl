@@ -149,7 +149,7 @@ def parse_args(argv=None):
     p.add_argument("--summarize", action="store_true", help="crawl: askg1 summaries for the first few pages (slow)")
     p.add_argument("--url", required=True)
     p.add_argument("--prompt", default="", help="browse: instruction for the agent (may ask for JSON)")
-    p.add_argument("--max-steps", type=int, default=None, help="default 8, capped at 10")
+    p.add_argument("--max-steps", type=int, default=None, help="default 15, capped at 30")
     p.add_argument("--headless", action="store_true")
     p.add_argument("--allow-external", action="store_true", help="let the agent leave the start domain")
     p.add_argument("--no-summary", action="store_true", help="audit mode: skip the askg1 summary call")
