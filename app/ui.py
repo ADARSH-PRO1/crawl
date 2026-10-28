@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT))  # `streamlit run app/ui.py` only puts app/ on sys
 
 import streamlit as st  # noqa: E402
 
-from app.config import (ALLOW_SESSION, CRAWL_OUT_DIR, CRAWL_TOTAL_TIMEOUT_S, DEFAULT_CRAWL_PAGES, MAX_CRAWL_PAGES,  # noqa: E402
+from app.config import (CRAWL_OUT_DIR, CRAWL_TOTAL_TIMEOUT_S, DEFAULT_CRAWL_PAGES, MAX_CRAWL_PAGES,  # noqa: E402
                         ConfigError, SETTINGS)  # noqa: F401  (importing config fails fast on forbidden keys)
 
 RUNS_DIR = ROOT / "reports" / "runs"
@@ -69,8 +69,7 @@ def build_cmd(mode: str, url: str, prompt: str, steps: int, headless: bool, exte
         if summarize:
             cmd.append("--summarize")
         return cmd
-    if mode != "audit":
-        cmd += ["--prompt", prompt, "--max-steps", str(steps)]
+    cmd += ["--prompt", prompt, "--max-steps", str(steps)]
     if headless:
         cmd.append("--headless")
     if external:
@@ -78,10 +77,9 @@ def build_cmd(mode: str, url: str, prompt: str, steps: int, headless: bool, exte
     return cmd
 
 
-def run_subprocess(cmd: list[str], log_box, timeout_s: int = RUN_TIMEOUT_S,
-                   extra_env: dict | None = None) -> tuple[dict | None, list[str]]:
+def run_subprocess(cmd: list[str], log_box, timeout_s: int = RUN_TIMEOUT_S) -> tuple[dict | None, list[str]]:
     """Stream the runner's output live; returns (RESULT_JSON payload, log lines)."""
-    env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", **(extra_env or {})}
+    env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
     proc = subprocess.Popen(
         cmd, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace", bufsize=1,
@@ -140,12 +138,10 @@ def show_crawl(result: dict) -> None:
     m2.metric("Skipped", len(skipped))
     m3.metric("Crawl time (s)", result.get("crawl_seconds", "-"))
     m4.metric("Words", sum(p.get("words", 0) for p in pages))
-    if result.get("authenticated"):
-        st.caption("Crawled with a logged-in session.")
     if result.get("timed_out"):
         st.warning("The crawl hit its time budget; partial results are shown.")
     if any(str(sk.get("reason", "")).startswith("login_required") for sk in skipped):
-        st.warning("Some pages are behind a login. Provide a session under 'Logged-in site' and run again.")
+        st.warning("Some pages are behind a login. The crawler does not log in, so those pages were skipped.")
     if pages:
         st.subheader("Crawled pages (index.json)")
         st.dataframe([{k: p[k] for k in ("url", "title", "file", "words", "depth")} for p in pages],
@@ -179,27 +175,12 @@ def show_result(result: dict) -> None:
     left, right = st.columns(2)
     with left:
         st.subheader("Result")
-        if mode == "audit":
-            st.markdown(result.get("summary") or "_No summary._")
-            if result.get("summary_error"):
-                st.caption(f"Summary unavailable: {result['summary_error']}")
-        else:
-            st.write(result.get("raw") or "_No answer returned._")
+        st.write(result.get("raw") or "_No answer returned._")
     with right:
-        st.subheader("Static audit" if mode == "audit" else "Run metrics")
-        if mode == "audit" and result.get("static_audit"):
-            a = result["static_audit"]
-            m1, m2, m3 = st.columns(3)
-            m1.metric("HTTP status", a.get("http_status", "-"))
-            m2.metric("Issues", len(a.get("issues", [])))
-            m3.metric("Broken links", len(a.get("broken_links", [])))
-            for issue in a.get("issues", []):
-                st.warning(issue)
-            st.json(a, expanded=False)
-        else:
-            keys = ("steps", "llm_calls", "peak_prompt_tokens", "context_limit", "completion_tokens",
-                    "context_overflow", "errors", "seconds")
-            st.json({k: result[k] for k in keys if k in result})
+        st.subheader("Run metrics")
+        keys = ("steps", "llm_calls", "peak_prompt_tokens", "context_limit", "completion_tokens",
+                "context_overflow", "errors", "seconds")
+        st.json({k: result[k] for k in keys if k in result})
 
 
 # ---- page -------------------------------------------------------------------------------------
@@ -210,16 +191,16 @@ st.title("askg1 Site Crawler & Browser Agent" if AI else "Site Crawler")
 if AI:
     st.caption(f"Model: {SETTINGS.model} | context window: {SETTINGS.context_tokens} tokens | all inference via askg1")
 else:
-    st.caption("Crawl-only deployment: askg1 is not reachable from here, so AI summaries, the AI audit verdict and "
-               "the browser agent are switched off. Crawling and the static page audit use no AI.")
+    st.caption("Crawl-only deployment: askg1 is not reachable from here, so AI summaries and the browser agent "
+               "are switched off. Crawling uses no AI.")
 if browser_status.startswith("failed"):
     st.error(f"Browser setup failed, crawling will not work: {browser_status}")
 
 prompt, headless, steps, external, summarize = "Tell me the main heading of the page.", True, 8, False, False
 with st.form("task"):
-    modes = ["crawl", "audit", "browse"] if AI else ["crawl", "audit"]
+    modes = ["crawl", "browse"] if AI else ["crawl"]
     mode = st.radio("Mode", modes, horizontal=True,
-                    help="crawl = whole site to Markdown files (no LLM), audit = page checks, "
+                    help="crawl = whole site to Markdown files (no LLM), "
                          "browse = single-page browser agent (slow, optional; ask for JSON in the instruction)")
     url = st.text_input("Target URL", "https://docs.browser-use.com")
     st.caption("Crawl options (crawl mode)")
@@ -234,13 +215,6 @@ with st.form("task"):
         headless = c1.toggle("Headless browser", value=True)
         steps = c2.slider("Max steps", 1, 30, 15)
         external = c3.toggle("Allow leaving the start domain", value=False)
-    state_file, cookie_header = None, ""
-    if ALLOW_SESSION:  # local opt-in only (ALLOW_SESSION=1); not in the PDF, so off by default
-        with st.expander("Logged-in site (optional, crawl mode, local use with a TEST account only)"):
-            st.caption("Create the file once with scripts/save_session.py, or paste a Cookie header. "
-                       "Only cookies/localStorage for the target host are used; nothing is stored.")
-            state_file = st.file_uploader("Playwright storage-state JSON", type=["json"])
-            cookie_header = st.text_input("...or Cookie header (name=value; name2=value2)", type="password")
     submitted = st.form_submit_button("Run", type="primary")
 
 if submitted:
@@ -248,20 +222,14 @@ if submitted:
         st.warning("Enter a URL.")
         st.stop()
     cmd = build_cmd(mode, url.strip(), prompt, steps, headless, external, max_pages, max_depth, summarize)
-    session_env = {}
-    if mode == "crawl":
-        if state_file is not None:
-            session_env["CRAWL_STORAGE_STATE"] = state_file.getvalue().decode("utf-8", errors="replace")
-        if cookie_header.strip():
-            session_env["CRAWL_COOKIES"] = cookie_header.strip()
     timeout_s = (CRAWL_TOTAL_TIMEOUT_S + 120 + (360 if summarize else 0)) if mode == "crawl" else RUN_TIMEOUT_S
     with st.expander("Live log", expanded=True):
         log_box = st.empty()
         with st.spinner("Running..."):
-            result, lines = run_subprocess(cmd, log_box, timeout_s, session_env)
+            result, lines = run_subprocess(cmd, log_box, timeout_s)
     request = {"mode": mode, "url": url, "prompt": prompt, "max_steps": steps,
                "headless": headless, "allow_external": external, "max_pages": max_pages,
-               "max_depth": max_depth, "summarize": summarize, "authenticated": bool(session_env)}
+               "max_depth": max_depth, "summarize": summarize}
     if result is None:
         st.error("The runner exited without a result. See the log above.")
         save_run(mode, request, None, lines)

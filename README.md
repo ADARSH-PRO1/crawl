@@ -38,7 +38,6 @@ and otherwise falls back to the in-process library (about 10x slower on Windows 
 # CLI (always ends with a RESULT_JSON:<json> line)
 python -u -m app.runner --mode crawl --url https://docs.browser-use.com --max-pages 10 --max-depth 2
 python -u -m app.runner --mode crawl --url https://example.com --max-pages 1 --max-depth 0 --summarize
-python -u -m app.runner --mode audit --url https://example.com
 python -u -m app.runner --mode browse --url https://news.ycombinator.com --prompt "Return the title, url, points and comments of the top story as JSON" --headless
 # UI
 python -m streamlit run app/ui.py --server.port 8501
@@ -49,7 +48,6 @@ Crawl output: `reports/crawls/<timestamp>_<host>/docs_md/*.md`, `index.json` (ur
 | Mode | Engine | askg1 use |
 |---|---|---|
 | `crawl` (main) | Crawl4AI (Docker service or library) | none; optional 2-sentence summaries of the first 5 pages |
-| `audit` | httpx + BeautifulSoup | optional 1-shot summary (prompt about 500 tokens) |
 | `browse` | Browser Use agent (guide Step 6); ask for JSON in the instruction if needed | every step (slow; tuned for a 4096-token window) |
 
 ## Rules enforced in code

@@ -1,4 +1,4 @@
-"""CLI entry:  python -u -m app.runner --mode crawl|audit|browse --url URL [--max-pages N] [--prompt ...]
+"""CLI entry:  python -u -m app.runner --mode crawl|browse --url URL [--max-pages N] [--prompt ...]
 
 Logs stream to stdout/stderr; the final line is always  RESULT_JSON:<json>.
 """
@@ -12,7 +12,6 @@ import time
 from urllib.parse import urlparse
 
 from app import tasks
-from app.audit import run_audit, summarize_audit
 from app.config import SETTINGS, UrlError, avalidate_public_url, clamp_steps
 
 OVERFLOW_MARKERS = ("exceeds the available context", "context size", "context length", "maximum context")
@@ -23,7 +22,7 @@ def emit(result: dict) -> None:
 
 
 async def run_agent(args, result: dict) -> None:
-    # Imported lazily so audit mode never loads Playwright/browser-use.
+    # Imported lazily so crawl mode never loads browser-use.
     from browser_use import Agent, BrowserProfile
     from browser_use.tools.service import Tools
     from app.llm import get_llm
@@ -120,14 +119,6 @@ async def run(args) -> dict:
         args.max_steps = clamp_steps(args.max_steps)
         if args.mode == "crawl":
             await run_crawl(args, result)
-        elif args.mode == "audit":
-            audit = await run_audit(args.url)
-            result.update(static_audit=audit, ok=bool(audit.get("ok")), steps=0, llm_context_tokens_used_by_agent=0)
-            if audit.get("ok") and not args.no_summary and SETTINGS.askg1_enabled:
-                try:
-                    result["summary"] = await summarize_audit(audit)
-                except Exception as e:  # noqa: BLE001 - summary is optional; the audit itself already succeeded
-                    result["summary_error"] = f"{type(e).__name__}: {str(e)[:150]}"
         else:
             if not SETTINGS.askg1_enabled:
                 raise cfg.ConfigError("The browser agent needs askg1, which is not configured in this deployment.")
@@ -144,7 +135,7 @@ async def run(args) -> dict:
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(prog="python -u -m app.runner")
-    p.add_argument("--mode", choices=["crawl", "audit", "browse"], required=True)
+    p.add_argument("--mode", choices=["crawl", "browse"], required=True)
     p.add_argument("--max-pages", type=int, default=None, help="crawl: page cap (default 20, max 100)")
     p.add_argument("--max-depth", type=int, default=None, help="crawl: link depth (default 2, max 3)")
     p.add_argument("--summarize", action="store_true", help="crawl: askg1 summaries for the first few pages (slow)")
@@ -153,7 +144,6 @@ def parse_args(argv=None):
     p.add_argument("--max-steps", type=int, default=None, help="default 15, capped at 30")
     p.add_argument("--headless", action="store_true")
     p.add_argument("--allow-external", action="store_true", help="let the agent leave the start domain")
-    p.add_argument("--no-summary", action="store_true", help="audit mode: skip the askg1 summary call")
     return p.parse_args(argv)
 
 

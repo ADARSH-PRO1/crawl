@@ -33,10 +33,6 @@ DEFAULT_CONTEXT_TOKENS = 4096
 DEFAULT_MAX_STEPS = 15
 MAX_STEPS_CAP = 30
 
-# Authenticated crawling is NOT part of the PDF (it says: no login bypassing, test accounts only, keep data local).
-# It exists only as an explicit, local opt-in: ALLOW_SESSION=1. Never enable it on a hosted deployment.
-ALLOW_SESSION = os.environ.get("ALLOW_SESSION") == "1"
-
 # Crawl limits (PDF: "keep crawl rates low"). The head may enter any site, so caps are hard, not advisory.
 # Without askg1 we are on a small shared host (little RAM), so the default cap is lower; override with CRAWL_MAX_PAGES_CAP.
 MAX_CRAWL_PAGES = int(os.environ.get("CRAWL_MAX_PAGES_CAP", 100 if _askg1_configured() else 15))
@@ -66,7 +62,7 @@ class Settings:
     context_tokens: int
     max_output_tokens: int   # reserved for the reply; counts against the context window
     dom_chars: int           # cap on page-state text sent to the model per step
-    askg1_enabled: bool = True  # False = crawl-only deployment: summaries, audit verdict and agent are unavailable
+    askg1_enabled: bool = True  # False = crawl-only deployment: summaries and agent are unavailable
 
 
 def _forbidden_present(env_file: Path | None = ROOT / ".env") -> list[str]:

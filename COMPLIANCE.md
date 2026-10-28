@@ -32,6 +32,6 @@ Status: OK = enforced/verified in this repo, DEV = documented deviation, YOU = m
 ## Deviations
 - **Context window 4096 vs PDF 20,000+.** The PDF says askg1's real values win. The agent is built for 4096: compact system prompt, six actions only, capped page text and output. Latency is not a concern, so the step limit is raised (default 15, cap 30) to finish tasks in small steps.
 - **Structured output disabled** in `app/llm.py`: askg1 degenerates under JSON-schema decoding (verified earlier). The reply format is taught by the prompt in `app/tasks.py`.
-- **Authenticated crawling is not in the PDF.** Off by default. Only with `ALLOW_SESSION=1`, local use, TEST accounts only. It is refused otherwise. Never enable it on a hosted deployment (PDF: no login bypassing, test accounts only, keep data local). When on, nav/aside are kept so sidebar links can be followed, and links containing logout/signout/`/auth/`/`/api/` are skipped.
+- **No login support.** The PDF says no login bypassing, so the crawler never logs in. Pages that are a sign-in form are skipped as `login_required`. The earlier optional session feature (`ALLOW_SESSION`) and the `audit` mode (not in the PDF) were removed.
 - **Hosted build.** The Streamlit Cloud build keeps crawled pages on a third party's server. The PDF says keep data local; get lead approval before using it for anything non-public.
-- The 2026-10-27 crawl of the SendSafe app used an Admin session before this gate existed. Confirm with the lead that it was a test account.
+- The 2026-10-27 crawl of the SendSafe app used an Admin session (feature since removed). Confirm with the lead that it was a test account.

@@ -123,38 +123,6 @@ def test_looks_login():
     assert not looks_login("# Find people\nName contains")
 
 
-def test_load_session_scopes_to_host(monkeypatch):
-    from app.crawl import load_session
-    monkeypatch.setattr("app.config.ALLOW_SESSION", True)
-    monkeypatch.delenv("CRAWL_STORAGE_STATE_FILE", raising=False)
-    monkeypatch.setenv("CRAWL_STORAGE_STATE", json.dumps({
-        "cookies": [{"name": "a", "value": "1", "domain": "app.example.com", "path": "/"},
-                    {"name": "b", "value": "2", "domain": "evil.com", "path": "/"}],
-        "origins": [{"origin": "https://app.example.com", "localStorage": []},
-                    {"origin": "https://other.com", "localStorage": []}]}))
-    monkeypatch.setenv("CRAWL_COOKIES", "sid=xyz; theme=dark")
-    s = load_session("app.example.com")
-    assert [c["name"] for c in s["cookies"]] == ["a", "sid", "theme"]
-    assert [o["origin"] for o in s["origins"]] == ["https://app.example.com"]
-
-
-def test_load_session_none_when_unset(monkeypatch):
-    from app.crawl import load_session
-    for k in ("CRAWL_STORAGE_STATE", "CRAWL_STORAGE_STATE_FILE", "CRAWL_COOKIES"):
-        monkeypatch.delenv(k, raising=False)
-    assert load_session("x.com") is None
-
-
-def test_unsafe_url_filter():
-    from crawl4ai.deep_crawling import URLPatternFilter
-    from app.crawl import UNSAFE_URL_GLOBS
-    f = URLPatternFilter(UNSAFE_URL_GLOBS, use_glob=True, reverse=True)
-    for u in ("https://a.com/logout", "https://a.com/auth/google", "https://a.com/api/samples/people", "https://a.com/sign-out"):
-        assert not f.apply(u), u
-    for u in ("https://a.com/inbox?folder=activity", "https://a.com/sequences/new", "https://a.com/blog/catalog"):
-        assert f.apply(u), u
-
-
 def test_distinct_titles(tmp_path):
     from app.crawl import distinct_titles
     d = tmp_path / "docs_md"
@@ -167,14 +135,6 @@ def test_distinct_titles(tmp_path):
              {"url": "https://a.com/x", "title": "Unique", "file": "docs_md/c.md"}]
     distinct_titles(pages, d)
     assert [p["title"] for p in pages] == ["Home page", "tasks", "Unique"]
-
-
-def test_session_refused_unless_enabled(monkeypatch):
-    from app.crawl import load_session
-    monkeypatch.setattr("app.config.ALLOW_SESSION", False)
-    monkeypatch.setenv("CRAWL_COOKIES", "sid=xyz")
-    with pytest.raises(config.ConfigError):
-        load_session("x.com")
 
 
 def test_clean_markdown_drops_json_blob_and_widget_text():

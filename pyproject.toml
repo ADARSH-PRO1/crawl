@@ -8,7 +8,6 @@ dependencies = [
     "browser-use==0.13.11",
     "streamlit>=1.40",
     "httpx>=0.27",
-    "beautifulsoup4>=4.12",
     "python-dotenv>=1.0",
     "pydantic>=2.7",
 ]
