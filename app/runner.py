@@ -69,7 +69,7 @@ async def run_agent(args, result: dict) -> None:
         max_history_items=6,             # keep only the last few steps in the prompt
         max_clickable_elements_length=SETTINGS.dom_chars,  # hard cap on DOM text per step
         include_attributes=["href"],     # [] would fall back to the (larger) default attribute set
-        max_actions_per_step=2,
+        max_actions_per_step=1,
         max_failures=2,
         llm_timeout=120,
         step_timeout=120,
