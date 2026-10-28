@@ -94,6 +94,13 @@ async def run_agent(args, result: dict) -> None:
     # The agent can call done(success=False) to give up; that must not be reported as a successful run.
     result["ok"] = bool(raw) and result["done"] and hist.is_successful() is not False
 
+    # If no real page ever loaded (tab stayed on about:blank), the site refused the automated browser. The model
+    # only saw an empty DOM, so whatever it answered is not about the site. Report that instead (never bypassed).
+    if not any(u and not u.startswith("about:") for u in hist.urls()):
+        result.update(ok=False, raw=None, error="The site did not load in the browser: it most likely blocks "
+                      "automated access (bot firewall). The agent does not bypass blocks.",
+                      hint="Try another site, or use crawl mode on pages that allow crawlers.")
+
 
 async def run_crawl(args, result: dict) -> None:
     # Lazy imports: Crawl4AI is only loaded for crawl mode. The crawl itself makes no LLM calls.
