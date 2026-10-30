@@ -1,4 +1,4 @@
-"""CLI entry:  python -u -m app.runner --mode crawl|browse --url URL [--max-pages N] [--prompt ...]
+"""CLI entry:  python -u -m app.runner --mode crawl|browse|similar|scrape --url URL [--max-pages N] [--prompt ...]
 
 Logs stream to stdout/stderr; the final line is always  RESULT_JSON:<json>.
 """
@@ -9,6 +9,7 @@ import asyncio
 import json
 import sys
 import time
+from pathlib import Path
 from urllib.parse import urlparse
 
 from app import tasks
@@ -118,15 +119,52 @@ async def run_crawl(args, result: dict) -> None:
         result["error"] = "No pages were crawled: " + "; ".join(reasons)[:300] if reasons else "No pages were crawled."
 
 
+async def run_similar_mode(args, result: dict) -> None:
+    from app.similar import run_similar  # lazy: only similar mode needs it
+
+    if not SETTINGS.askg1_enabled:
+        raise cfg.ConfigError("Similar-tools mode needs askg1, which is not configured in this deployment.")
+    await avalidate_public_url(args.url)
+    result.update(await run_similar(args.url, args.prompt, args.top))
+
+
+async def run_scrape_mode(args, result: dict) -> None:
+    from app.scrape import MAX_HTML_BYTES, run_page_details, run_scrape, run_scrape_html  # lazy; no LLM calls
+
+    if args.html_file:  # a page saved by the user: nothing is fetched
+        path = Path(args.html_file)
+        if not path.is_file() or path.stat().st_size > MAX_HTML_BYTES:
+            raise cfg.ConfigError(f"--html-file must be an existing file of at most {MAX_HTML_BYTES // 1_000_000} MB.")
+        result.update(await run_scrape_html(path.read_text(encoding="utf-8", errors="replace"), args.url,
+                                            args.list_index, args.max_items, args.page_details))
+        return
+    await avalidate_public_url(args.url)
+    if args.page_details:
+        result.update(await run_page_details(args.url))
+        return
+    result.update(await run_scrape(args.url, args.list_index, args.max_items, args.scrape_pages,
+                                   load_more_action=args.load_more, action_selector=args.load_more_selector,
+                                   each_url=args.scrape_each_url, detail_column=args.detail_column,
+                                   detail_max=args.detail_max, template=args.template, save_as=args.save_template,
+                                   instruction=args.prompt))
+
+
 async def run(args) -> dict:
     t0 = time.time()
     result: dict = {"mode": args.mode, "url": args.url, "ok": False}
     try:
-        await avalidate_public_url(args.url)
         args.max_steps = clamp_steps(args.max_steps)
-        if args.mode == "crawl":
+        if not args.url and not (args.mode == "scrape" and args.html_file):
+            raise cfg.ConfigError("--url is required.")
+        if args.mode == "similar":
+            await run_similar_mode(args, result)
+        elif args.mode == "scrape":
+            await run_scrape_mode(args, result)
+        elif args.mode == "crawl":
+            await avalidate_public_url(args.url)
             await run_crawl(args, result)
         else:
+            await avalidate_public_url(args.url)
             if not SETTINGS.askg1_enabled:
                 raise cfg.ConfigError("The browser agent needs askg1, which is not configured in this deployment.")
             await run_agent(args, result)
@@ -142,12 +180,26 @@ async def run(args) -> dict:
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(prog="python -u -m app.runner")
-    p.add_argument("--mode", choices=["crawl", "browse"], required=True)
+    p.add_argument("--mode", choices=["crawl", "browse", "similar", "scrape"], required=True)
+    p.add_argument("--list-index", type=int, default=0, help="scrape: which detected list to return (0 = best)")
+    p.add_argument("--max-items", type=int, default=None, help="scrape: row cap (default 200, max 2000)")
+    p.add_argument("--load-more", choices=["none", "scroll", "next", "more"], default="none",
+                   help="scrape: how to reach more rows: scroll (infinite scroll), next (next-page link or button), more (load-more button)")
+    p.add_argument("--load-more-selector", default="", help="scrape: CSS selector of the next / load-more button (default: found automatically)")
+    p.add_argument("--scrape-each-url", action="store_true", help="scrape: also read the page behind each row's link (same site)")
+    p.add_argument("--detail-column", default="", help="scrape: the link column to follow (default: the first column of links)")
+    p.add_argument("--detail-max", type=int, default=None, help="scrape: how many linked pages to read (default and max 30)")
+    p.add_argument("--page-details", action="store_true", help="scrape: one row with the details of this single page (title, text, label/value pairs)")
+    p.add_argument("--html-file", default="", help="scrape: scrape this saved HTML file instead of fetching the URL (the URL, if given, only resolves relative links)")
+    p.add_argument("--template", default="", help="scrape: reuse the saved template of this name for the site")
+    p.add_argument("--save-template", default="", help="scrape: save the chosen list under this name for the site")
+    p.add_argument("--scrape-pages", type=int, default=None, help="scrape: how many pages or scroll rounds (default 1)")
     p.add_argument("--max-pages", type=int, default=None, help="crawl: page cap (default 20, max 100)")
     p.add_argument("--max-depth", type=int, default=None, help="crawl: link depth (default 2, max 3)")
     p.add_argument("--summarize", action="store_true", help="crawl: askg1 summaries for the first few pages (slow)")
-    p.add_argument("--url", required=True)
-    p.add_argument("--prompt", default="", help="browse: instruction for the agent (may ask for JSON)")
+    p.add_argument("--url", default="", help="the start URL (crawl, browse) or the tool's page (similar)")
+    p.add_argument("--top", type=int, default=10, help="similar: how many similar tools to list (1 to 10)")
+    p.add_argument("--prompt", default="", help="browse: instruction for the agent; similar: what to find (default: the similar tools); scrape: optional, askg1 uses it to pick the list")
     p.add_argument("--max-steps", type=int, default=None, help="default 15, capped at 30")
     p.add_argument("--headless", action="store_true")
     p.add_argument("--allow-external", action="store_true", help="let the agent leave the start domain")

@@ -15,10 +15,13 @@ sys.path.insert(0, str(ROOT))  # `streamlit run app/ui.py` only puts app/ on sys
 
 import streamlit as st  # noqa: E402
 
-from app.config import (CRAWL_OUT_DIR, CRAWL_TOTAL_TIMEOUT_S, DEFAULT_CRAWL_PAGES, MAX_CRAWL_PAGES,  # noqa: E402
+from app.config import (SIMILAR_TOTAL_TIMEOUT_S, CRAWL_OUT_DIR, CRAWL_TOTAL_TIMEOUT_S, DEFAULT_CRAWL_PAGES, MAX_CRAWL_PAGES,  # noqa: E402
+                        SCRAPE_DEFAULT_ITEMS, SCRAPE_DETAIL_MAX_URLS, SCRAPE_MAX_ITEMS, SCRAPE_MAX_PAGES,
+                        SCRAPE_TOTAL_TIMEOUT_S,
                         ConfigError, SETTINGS)  # noqa: F401  (importing config fails fast on forbidden keys)
 
 RUNS_DIR = ROOT / "reports" / "runs"
+UPLOAD_DIR = ROOT / "reports" / "uploads"
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 RUN_TIMEOUT_S = 300
 
@@ -61,9 +64,35 @@ def gate() -> None:
     st.stop()
 
 
+def scrape_args(o: dict, instruction: str = "") -> list[str]:
+    """Runner arguments for scrape mode from the form's options (all optional)."""
+    args = ["--max-items", str(o.get("max_items", SCRAPE_DEFAULT_ITEMS)), "--load-more", o.get("load_more", "none"),
+            "--scrape-pages", str(o.get("pages", 1))]
+    if o.get("load_more_selector", "").strip():
+        args += ["--load-more-selector", o["load_more_selector"].strip()]
+    if o.get("each_url"):
+        args += ["--scrape-each-url", "--detail-max", str(o.get("detail_max", 10))]
+    if o.get("template", "").strip():
+        args += ["--template", o["template"].strip()]
+    if o.get("save_template", "").strip():
+        args += ["--save-template", o["save_template"].strip()]
+    if o.get("page_details"):
+        args.append("--page-details")
+    if o.get("html_file"):
+        args += ["--html-file", str(o["html_file"])]
+    if o.get("use_instruction") and instruction.strip():
+        args += ["--prompt", instruction.strip()]
+    return args
+
+
 def build_cmd(mode: str, url: str, prompt: str, steps: int, headless: bool, external: bool,
-              max_pages: int = 20, max_depth: int = 2, summarize: bool = False) -> list[str]:
+              max_pages: int = 20, max_depth: int = 2, summarize: bool = False,
+              top_n: int = 10, scrape: dict | None = None) -> list[str]:
     cmd = [sys.executable, "-u", "-m", "app.runner", "--mode", mode, "--url", url]
+    if mode == "scrape":
+        return cmd + scrape_args(scrape or {}, prompt)
+    if mode == "similar":
+        return cmd + ["--prompt", prompt, "--top", str(top_n)]
     if mode == "crawl":
         cmd += ["--max-pages", str(max_pages), "--max-depth", str(max_depth)]
         if summarize:
@@ -159,6 +188,82 @@ def show_crawl(result: dict) -> None:
                            file_name=Path(result["out_dir"]).name + ".zip", mime="application/zip")
 
 
+def show_similar(result: dict) -> None:
+    from app.similar import COLUMNS, to_csv, to_markdown
+
+    profile = result.get("profile") or {}
+    if profile:
+        st.caption(f"Target: **{profile.get('name')}**: {profile.get('does') or '-'}")
+    used = ", ".join(result.get("engines_used") or []) or "-"
+    bad = ", ".join(f"{f['engine']} ({f['reason']})" for f in result.get("engines_failed", [])) or "none"
+    st.caption(f"Search engines that answered: {used} | failed or blocked: {bad} | {result.get('seconds', '-')} s")
+    rows = result.get("rows", [])
+    if rows:
+        st.subheader(f"Similar tools ({len(rows)})")
+        st.dataframe([{h: r.get(k) or "" for k, h in COLUMNS} for r in rows], width="stretch", hide_index=True,
+                     column_config={"URL": st.column_config.LinkColumn("URL"),
+                                    "GitHub repo": st.column_config.LinkColumn("GitHub repo")})
+        c1, c2 = st.columns(2)
+        c1.download_button("Download table (CSV)", to_csv(rows), file_name="similar_tools.csv", mime="text/csv")
+        c2.download_button("Download table (Markdown)", to_markdown(rows), file_name="similar_tools.md",
+                           mime="text/markdown")
+    if result.get("skipped"):
+        with st.expander(f"Skipped pages ({len(result['skipped'])})"):
+            st.dataframe(result["skipped"], width="stretch", hide_index=True)
+
+
+def show_scrape(result: dict) -> None:
+    from app.scrape import to_csv
+
+    lists = result.get("lists") or []
+    if not lists:
+        return
+    labels = [f"List {i + 1}: {len(x['rows'])} rows, {len(x['columns'])} columns ({x['selector'][-60:]})"
+              for i, x in enumerate(lists)]
+    pick = st.selectbox("Detected lists (best first)", range(len(lists)), index=result.get("chosen", 0),
+                        format_func=lambda i: labels[i])
+    chosen = lists[pick]
+    st.caption(f"Found with the {result.get('method')} detector | backend: {result.get('backend')} | "
+               f"{result.get('pages', 1)} page(s) | {result.get('seconds', '-')} s"
+               + (" | list chosen by askg1" if result.get("picked_by") else "")
+               + (f" | template: {result['template']}" if result.get("template") else "")
+               + (f" | saved template: {result['saved_template']}" if result.get("saved_template") else ""))
+    if result.get("template_note"):
+        st.warning(result["template_note"])
+    if result.get("details"):
+        d = result["details"]
+        st.caption(f"Scrape each URL: read {d['fetched']} linked page(s) from the '{d['column']}' column (limit {d['limit']}).")
+    keep = st.multiselect("Columns to keep", chosen["columns"], default=chosen["columns"])
+    with st.expander("Rename columns"):
+        names = {c: st.text_input(c, c, key=f"rename_{pick}_{c}") or c for c in keep}
+    columns = [names[c] for c in keep]
+    rows = [{names[c]: r.get(c, "") for c in keep} for r in chosen["rows"]]
+    st.subheader(f"Scraped table ({len(rows)} rows)")
+    st.dataframe(rows, width="stretch", hide_index=True)
+    with st.expander("Copy to clipboard (tab separated: pastes straight into Excel or Google Sheets)"):
+        cell = lambda v: str(v).replace("\t", " ").replace("\n", " ")  # noqa: E731
+        st.code("\n".join(["\t".join(columns)] + ["\t".join(cell(r.get(c, "")) for c in columns) for r in rows]),
+                language="text")
+    c1, c2 = st.columns(2)
+    c1.download_button("Download CSV", to_csv(columns, rows), file_name="scrape.csv", mime="text/csv")
+    c2.download_button("Download JSON", json.dumps(rows, indent=2, ensure_ascii=False), file_name="scrape.json",
+                       mime="application/json")
+    if result.get("method") == "browser":
+        with st.expander("Save these choices as a template for this site"):
+            name = st.text_input("Template name", key="tpl_name")
+            if st.button("Save template") and name.strip():
+                from app.scrape import save_template
+                try:
+                    save_template(result["url"], name, chosen["selector"], result.get("load_more"),
+                                  [{"name": c, "as": names[c]} for c in keep])
+                    st.success(f"Saved template {name.strip()!r}. Use it by name next time.")
+                except ValueError as e:
+                    st.error(str(e))
+    if result.get("skipped"):
+        with st.expander(f"Skipped ({len(result['skipped'])})"):
+            st.dataframe(result["skipped"], width="stretch", hide_index=True)
+
+
 def show_result(result: dict) -> None:
     mode = result.get("mode")
     if result.get("ok"):
@@ -170,6 +275,12 @@ def show_result(result: dict) -> None:
 
     if mode == "crawl":
         show_crawl(result)
+        return
+    if mode == "similar":
+        show_similar(result)
+        return
+    if mode == "scrape":
+        show_scrape(result)
         return
 
     left, right = st.columns(2)
@@ -197,45 +308,100 @@ if browser_status.startswith("failed"):
     st.error(f"Browser setup failed, crawling will not work: {browser_status}")
 
 prompt, headless, steps, external, summarize = "Tell me the main heading of the page.", True, 8, False, False
+top_n = 10
+max_pages, max_depth = DEFAULT_CRAWL_PAGES, 2
+scrape_opts: dict = {}
+modes = ["crawl", "scrape", "browse", "similar"] if AI else ["crawl", "scrape"]
+# The mode choice sits outside the form so that changing it redraws the page: only the chosen mode's options are shown.
+mode = st.radio("Mode", modes, horizontal=True, key="mode",
+                help="crawl = whole site to Markdown files (no LLM), "
+                     "scrape = turn a listing page into a table (CSV / JSON), no LLM, "
+                     "browse = single-page browser agent (slow, optional; ask for JSON in the instruction), "
+                     "similar = give a tool's page, get a table of similar tools found by web search (needs local SearXNG)")
+DEFAULT_URLS = {"crawl": "https://docs.browser-use.com", "scrape": "https://books.toscrape.com",
+                "browse": "https://news.ycombinator.com", "similar": "https://github.com/browseros-ai/BrowserOS"}
+upload = None
 with st.form("task"):
-    modes = ["crawl", "browse"] if AI else ["crawl"]
-    mode = st.radio("Mode", modes, horizontal=True,
-                    help="crawl = whole site to Markdown files (no LLM), "
-                         "browse = single-page browser agent (slow, optional; ask for JSON in the instruction)")
-    url = st.text_input("Target URL", "https://docs.browser-use.com")
-    st.caption("Crawl options (crawl mode)")
-    k1, k2, k3 = st.columns(3)
-    max_pages = k1.slider("Max pages", 1, MAX_CRAWL_PAGES, min(DEFAULT_CRAWL_PAGES, MAX_CRAWL_PAGES))
-    max_depth = k2.slider("Link depth", 0, 3, 2)
-    if AI:
-        summarize = k3.toggle("askg1 summaries of first pages (slow)", value=False)
-        st.caption("Agent options (browse mode)")
+    if mode == "scrape":
+        url = st.text_input("Target URL", DEFAULT_URLS[mode], key="url_scrape",
+                            help="Leave it empty when you upload a saved HTML file below")
+        scrape_opts["max_items"] = st.slider("Max rows", 10, SCRAPE_MAX_ITEMS, SCRAPE_DEFAULT_ITEMS)
+        s1, s2, s3 = st.columns(3)
+        scrape_opts["load_more"] = s1.selectbox("Load more rows by", ["none", "scroll", "next", "more"],
+                                                help="scroll = infinite scroll, next = next-page link or button, more = load-more button")
+        scrape_opts["pages"] = s2.slider("Max pages / scrolls", 1, SCRAPE_MAX_PAGES, 5)
+        scrape_opts["load_more_selector"] = s3.text_input("Button CSS selector (optional)", "",
+                                                          help="Leave empty to find the Next / Load more button automatically")
+        d1, d2 = st.columns(2)
+        scrape_opts["each_url"] = d1.toggle("Scrape each URL (read the page behind every row's link)", value=False,
+                                            help="Same site only, at most 30 pages, 2 at a time")
+        scrape_opts["detail_max"] = d2.slider("Linked pages to read", 1, SCRAPE_DETAIL_MAX_URLS, 10)
+        scrape_opts["page_details"] = st.toggle("Page details only (one row: title, text, label/value pairs of this single page)",
+                                                value=False)
+        upload = st.file_uploader("Or scrape a page you saved yourself (HTML file, e.g. a login-only page saved from your browser)",
+                                  type=["html", "htm"], help="Nothing is fetched and no login is used. The Target URL, if filled, only makes relative links absolute.")
+        t1, t2 = st.columns(2)
+        scrape_opts["template"] = t1.text_input("Use saved template (name)", "",
+                                                help="Reuses the list, load-more setting and columns saved for this site")
+        scrape_opts["save_template"] = t2.text_input("Save this list as template (name)", "")
+        if AI:
+            prompt = st.text_input("Which list do you want? (optional)", "",
+                                   help="Only matters when the page has several lists: askg1 reads one line per list and picks one, it never writes data")
+            scrape_opts["use_instruction"] = bool(prompt.strip())
+    elif mode == "crawl":
+        url = st.text_input("Target URL", DEFAULT_URLS[mode], key="url_crawl")
+        k1, k2, k3 = st.columns(3)
+        max_pages = k1.slider("Max pages", 1, MAX_CRAWL_PAGES, min(DEFAULT_CRAWL_PAGES, MAX_CRAWL_PAGES))
+        max_depth = k2.slider("Link depth", 0, 3, 2)
+        if AI:
+            summarize = k3.toggle("askg1 summaries of first pages (slow)", value=False)
+    elif mode == "browse":
+        url = st.text_input("Target URL", DEFAULT_URLS[mode], key="url_browse")
         prompt = st.text_area("Instruction", prompt, height=80)
         c1, c2, c3 = st.columns(3)
         headless = c1.toggle("Headless browser", value=True)
         steps = c2.slider("Max steps", 1, 30, 15)
         external = c3.toggle("Allow leaving the start domain", value=False)
+    else:  # similar
+        url = st.text_input("Target URL", DEFAULT_URLS[mode], key="url_similar")
+        prompt = st.text_area("Instruction", "find the similar tools", height=80)
+        top_n = st.slider("How many similar tools", 3, 10, 10)
     submitted = st.form_submit_button("Run", type="primary")
 
 if submitted:
-    if not url.strip():
+    if not url.strip() and not (mode == "scrape" and upload is not None):
         st.warning("Enter a URL.")
         st.stop()
-    cmd = build_cmd(mode, url.strip(), prompt, steps, headless, external, max_pages, max_depth, summarize)
-    timeout_s = (CRAWL_TOTAL_TIMEOUT_S + 120 + (360 if summarize else 0)) if mode == "crawl" else RUN_TIMEOUT_S
+    st.session_state.pop("scrape_result", None)
+    if mode == "scrape" and upload is not None:
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        saved = UPLOAD_DIR / f"{time.strftime('%Y%m%d_%H%M%S')}.html"
+        saved.write_bytes(upload.getvalue()[:5_000_000])
+        scrape_opts["html_file"] = str(saved)
+    cmd = build_cmd(mode, url.strip(), prompt, steps, headless, external, max_pages, max_depth, summarize, top_n,
+                    scrape_opts)
+    timeout_s = {"crawl": CRAWL_TOTAL_TIMEOUT_S + 120 + (360 if summarize else 0),
+                 "similar": SIMILAR_TOTAL_TIMEOUT_S + 60,
+                 "scrape": SCRAPE_TOTAL_TIMEOUT_S + 60}.get(mode, RUN_TIMEOUT_S)
     with st.expander("Live log", expanded=True):
         log_box = st.empty()
         with st.spinner("Running..."):
             result, lines = run_subprocess(cmd, log_box, timeout_s)
     request = {"mode": mode, "url": url, "prompt": prompt, "max_steps": steps,
                "headless": headless, "allow_external": external, "max_pages": max_pages,
-               "max_depth": max_depth, "summarize": summarize}
+               "max_depth": max_depth, "summarize": summarize, "top_n": top_n, "scrape": scrape_opts}
     if result is None:
         st.error("The runner exited without a result. See the log above.")
         save_run(mode, request, None, lines)
     else:
         path = save_run(mode, request, result, lines)
-        show_result(result)
+        if mode == "scrape":  # its list picker and column choices rerun the page, so keep the result across reruns
+            st.session_state["scrape_result"] = result
+        else:
+            show_result(result)
         st.download_button("Download run JSON", json.dumps(result, indent=2, ensure_ascii=False),
                            file_name=path.name, mime="application/json")
         st.caption(f"Saved to {path.relative_to(ROOT)}")
+
+if st.session_state.get("scrape_result"):
+    show_result(st.session_state["scrape_result"])

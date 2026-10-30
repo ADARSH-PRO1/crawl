@@ -45,6 +45,22 @@ CRAWL_MAX_PAGE_CHARS = 400_000
 CRAWL_TOTAL_TIMEOUT_S = 480
 CRAWL_OUT_DIR = ROOT / "reports" / "crawls"
 
+# Similar-tools mode (not in the PDF): local SearXNG search, then askg1 over the pages. See README, "Similar tools mode".
+SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://127.0.0.1:8888").rstrip("/")
+SIMILAR_TOP_N = 10
+SIMILAR_MAX_LIST_PAGES = 8
+SIMILAR_TOTAL_TIMEOUT_S = 1500
+
+# Scrape mode (not in the PDF): list detection in the rendered page, no LLM. Hard caps, like the crawl limits.
+SCRAPE_DEFAULT_ITEMS = 200
+SCRAPE_MAX_ITEMS = 2000
+SCRAPE_DEFAULT_PAGES = 1
+SCRAPE_MAX_PAGES = 20            # next-page / scroll rounds
+SCRAPE_DETAIL_MAX_URLS = 30      # "scrape each URL" detail pages
+SCRAPE_TOTAL_TIMEOUT_S = 420
+SCRAPE_OUT_DIR = ROOT / "reports" / "scrapes"
+SCRAPE_TEMPLATES_FILE = ROOT / "reports" / "scrape_templates.json"
+
 
 class ConfigError(RuntimeError):
     pass
@@ -119,6 +135,11 @@ def clamp_steps(n: int | None) -> int:
 def clamp_crawl(pages: int | None, depth: int | None) -> tuple[int, int]:
     return (max(1, min(pages or DEFAULT_CRAWL_PAGES, MAX_CRAWL_PAGES)),
             max(0, min(DEFAULT_CRAWL_DEPTH if depth is None else depth, MAX_CRAWL_DEPTH)))
+
+
+def clamp_scrape(items: int | None, pages: int | None) -> tuple[int, int]:
+    return (max(1, min(items or SCRAPE_DEFAULT_ITEMS, SCRAPE_MAX_ITEMS)),
+            max(1, min(pages or SCRAPE_DEFAULT_PAGES, SCRAPE_MAX_PAGES)))
 
 
 def estimate_tokens(text: str) -> int:

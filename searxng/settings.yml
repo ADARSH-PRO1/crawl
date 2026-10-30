@@ -1,0 +1,27 @@
+# Local SearXNG for similar-tools mode (not in the PDF). Bound to 127.0.0.1 only; see README, "Similar tools mode".
+# The secret key comes from the SEARXNG_SECRET environment variable, never from this file.
+#
+# Engines probed from the developer machine on 2026-10-28:
+#   working : bing, yahoo, brave (rate-limits quick bursts), github (repository search)
+#   blocked : google (access denied), qwant (access denied), duckduckgo (CAPTCHA). Blocks are not bypassed.
+#   absent  : startpage, mojeek (not in this SearXNG image)
+use_default_settings:
+  engines:
+    keep_only:
+      - bing
+      - yahoo
+      - brave
+      - github
+server:
+  limiter: false        # private single-user instance; the limiter needs Redis
+  image_proxy: false
+search:
+  formats:
+    - html
+    - json              # similar mode reads the JSON API (without this SearXNG answers HTTP 403)
+# Engines that are disabled in SearXNG's defaults must be switched on explicitly.
+engines:
+  - {name: bing, disabled: false}
+  - {name: yahoo, disabled: false}
+  - {name: brave, disabled: false}
+  - {name: github, disabled: false}
