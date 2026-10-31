@@ -152,3 +152,54 @@ def test_page_title_strips_link_markup():
     r = SimpleNamespace(metadata={}, url="https://a.com/")
     assert page_title(r, "#  [Quotes to Scrape](https://a.com/)\ntext") == "Quotes to Scrape"
     assert page_title(r, "no heading") == "https://a.com/"
+
+
+# ---- optional site login (the caller's own username + password) ---------------------------------------------
+def _login_server():
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _send(self, body, cookie=None):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            if cookie:
+                self.send_header("Set-Cookie", cookie)
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def do_GET(self):
+            if "sid=ok" in (self.headers.get("Cookie") or ""):
+                self._send("<h1>Dashboard</h1><a href='/logout'>Logout</a>")
+            else:
+                self._send("<form method=post action=/login><input name=user><input type=password name=pw>"
+                           "<button type=submit>Sign in</button></form>")
+
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode()
+            if "user=alice" in body and "pw=secret" in body:
+                self._send("<h1>Dashboard</h1>", cookie="sid=ok; Path=/")
+            else:
+                self._send("<form method=post><input name=user><input type=password name=pw>Wrong</form>")
+
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def test_login_session_good_and_bad_password():
+    import asyncio
+    from app.crawl import login_session
+    srv = _login_server()
+    url = f"http://127.0.0.1:{srv.server_port}/"
+    try:
+        state, start = asyncio.run(login_session(url, "alice", "secret"))
+        assert any(c["name"] == "sid" for c in state["cookies"]) and start.startswith(url)
+        with pytest.raises(config.ConfigError, match="Login failed"):
+            asyncio.run(login_session(url, "alice", "wrong"))
+    finally:
+        srv.shutdown()
+

@@ -87,7 +87,7 @@ def scrape_args(o: dict, instruction: str = "") -> list[str]:
 
 def build_cmd(mode: str, url: str, prompt: str, steps: int, headless: bool, external: bool,
               max_pages: int = 20, max_depth: int = 2, summarize: bool = False,
-              top_n: int = 10, scrape: dict | None = None) -> list[str]:
+              top_n: int = 10, scrape: dict | None = None, show_browser: bool = False) -> list[str]:
     cmd = [sys.executable, "-u", "-m", "app.runner", "--mode", mode, "--url", url]
     if mode == "scrape":
         return cmd + scrape_args(scrape or {}, prompt)
@@ -97,6 +97,8 @@ def build_cmd(mode: str, url: str, prompt: str, steps: int, headless: bool, exte
         cmd += ["--max-pages", str(max_pages), "--max-depth", str(max_depth)]
         if summarize:
             cmd.append("--summarize")
+        if show_browser:
+            cmd.append("--show-browser")
         return cmd
     cmd += ["--prompt", prompt, "--max-steps", str(steps)]
     if headless:
@@ -106,9 +108,21 @@ def build_cmd(mode: str, url: str, prompt: str, steps: int, headless: bool, exte
     return cmd
 
 
-def run_subprocess(cmd: list[str], log_box, timeout_s: int = RUN_TIMEOUT_S) -> tuple[dict | None, list[str]]:
+def login_fields(key: str) -> tuple[str, str]:
+    """Optional site login (the user's own account). Used by crawl and browse; nothing is saved."""
+    with st.expander("Site login (optional)"):
+        st.caption("Only if you have your own account on this site (plain username + password form). The app logs in "
+                   "once and then works with that session. Leave empty to use public pages only. Credentials go only to the "
+                   "target site (never to the AI model), are not saved and are not written to the run report.")
+        l1, l2 = st.columns(2)
+        return (l1.text_input("Username / email", "", key=f"{key}_user"),
+                l2.text_input("Password", "", type="password", key=f"{key}_pass"))
+
+
+def run_subprocess(cmd: list[str], log_box, timeout_s: int = RUN_TIMEOUT_S,
+                   extra_env: dict | None = None, detach: bool = False) -> tuple[dict | None, list[str]]:
     """Stream the runner's output live; returns (RESULT_JSON payload, log lines)."""
-    env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
+    env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", **(extra_env or {})}
     proc = subprocess.Popen(
         cmd, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace", bufsize=1,
@@ -124,6 +138,8 @@ def run_subprocess(cmd: list[str], log_box, timeout_s: int = RUN_TIMEOUT_S) -> t
                     result = json.loads(line[len("RESULT_JSON:"):])
                 except ValueError:
                     lines.append("[ui] could not parse RESULT_JSON")
+                if detach and result is not None:
+                    return result, lines  # leave the runner alive: it keeps the visible browser window open
                 continue
             lines.append(line)
             log_box.code("\n".join(lines[-60:]), language="text")
@@ -133,7 +149,8 @@ def run_subprocess(cmd: list[str], log_box, timeout_s: int = RUN_TIMEOUT_S) -> t
                 break
     finally:
         proc.stdout.close()
-        proc.wait()
+        if not (detach and result is not None):  # a detached runner keeps running: it holds the visible browser open
+            proc.wait()
     return result, lines
 
 
@@ -170,7 +187,9 @@ def show_crawl(result: dict) -> None:
     if result.get("timed_out"):
         st.warning("The crawl hit its time budget; partial results are shown.")
     if any(str(sk.get("reason", "")).startswith("login_required") for sk in skipped):
-        st.warning("Some pages are behind a login. The crawler does not log in, so those pages were skipped.")
+        st.warning("Some pages are behind a login and were skipped. Enter your own username and password under "
+                   "'Site login' to crawl them." if not result.get("authenticated")
+                   else "Some pages still showed a sign-in form even with the login, so they were skipped.")
     if pages:
         st.subheader("Crawled pages (index.json)")
         st.dataframe([{k: p[k] for k in ("url", "title", "file", "words", "depth")} for p in pages],
@@ -298,17 +317,14 @@ def show_result(result: dict) -> None:
 gate()
 AI = SETTINGS.askg1_enabled
 browser_status = ensure_browser()
-st.title("askg1 Site Crawler & Browser Agent" if AI else "Site Crawler")
-if AI:
-    st.caption(f"Model: {SETTINGS.model} | context window: {SETTINGS.context_tokens} tokens | all inference via askg1")
-else:
-    st.caption("Crawl-only deployment: askg1 is not reachable from here, so AI summaries and the browser agent "
-               "are switched off. Crawling uses no AI.")
+header = st.container()  # filled below, once the mode is known: every mode is its own page with its own name
 if browser_status.startswith("failed"):
     st.error(f"Browser setup failed, crawling will not work: {browser_status}")
 
 prompt, headless, steps, external, summarize = "Tell me the main heading of the page.", True, 8, False, False
 top_n = 10
+login_user = login_pass = ""
+show_browser = False
 max_pages, max_depth = DEFAULT_CRAWL_PAGES, 2
 scrape_opts: dict = {}
 modes = ["crawl", "scrape", "browse", "similar"] if AI else ["crawl", "scrape"]
@@ -318,6 +334,21 @@ mode = st.radio("Mode", modes, horizontal=True, key="mode",
                      "scrape = turn a listing page into a table (CSV / JSON), no LLM, "
                      "browse = single-page browser agent (slow, optional; ask for JSON in the instruction), "
                      "similar = give a tool's page, get a table of similar tools found by web search (needs local SearXNG)")
+MODE_PAGES = {
+    "crawl": ("Site Crawler", "Crawls a whole site into clean Markdown files plus index.json. Same site only, robots.txt honoured. No AI."),
+    "scrape": ("Web Scraper", "Turns a listing page into a table you can download as CSV or JSON. No AI. Blocked and login pages are "
+                              "reported, never bypassed."),
+    "browse": ("Browser Agent", "An askg1 agent opens the page and follows your instruction one step at a time. Slow, best effort."),
+    "similar": ("Similar Tools Finder", "Give a tool's page and get a table of similar tools found by web search."),
+}
+with header:
+    st.title(MODE_PAGES[mode][0])
+    st.caption(MODE_PAGES[mode][1])
+    if AI:
+        st.caption(f"Model: {SETTINGS.model} | context window: {SETTINGS.context_tokens} tokens | all inference via askg1")
+    else:
+        st.caption("askg1 is not reachable from this deployment, so the browser agent, similar-tools finder and AI "
+                   "summaries are switched off.")
 DEFAULT_URLS = {"crawl": "https://docs.browser-use.com", "scrape": "https://books.toscrape.com",
                 "browse": "https://news.ycombinator.com", "similar": "https://github.com/browseros-ai/BrowserOS"}
 upload = None
@@ -355,6 +386,9 @@ with st.form("task"):
         max_depth = k2.slider("Link depth", 0, 3, 2)
         if AI:
             summarize = k3.toggle("askg1 summaries of first pages (slow)", value=False)
+        show_browser = st.toggle("Show browser window (watch the crawl; slower, runs on this computer only)", value=False,
+                                 help="Opens a visible Chrome and visits one page at a time so you can see which pages are opened. Uses the in-process crawler instead of the Docker service.")
+        login_user, login_pass = login_fields("crawl")
     elif mode == "browse":
         url = st.text_input("Target URL", DEFAULT_URLS[mode], key="url_browse")
         prompt = st.text_area("Instruction", prompt, height=80)
@@ -362,6 +396,7 @@ with st.form("task"):
         headless = c1.toggle("Headless browser", value=True)
         steps = c2.slider("Max steps", 1, 30, 15)
         external = c3.toggle("Allow leaving the start domain", value=False)
+        login_user, login_pass = login_fields("browse")
     else:  # similar
         url = st.text_input("Target URL", DEFAULT_URLS[mode], key="url_similar")
         prompt = st.text_area("Instruction", "find the similar tools", height=80)
@@ -379,17 +414,19 @@ if submitted:
         saved.write_bytes(upload.getvalue()[:5_000_000])
         scrape_opts["html_file"] = str(saved)
     cmd = build_cmd(mode, url.strip(), prompt, steps, headless, external, max_pages, max_depth, summarize, top_n,
-                    scrape_opts)
+                    scrape_opts, show_browser)
     timeout_s = {"crawl": CRAWL_TOTAL_TIMEOUT_S + 120 + (360 if summarize else 0),
                  "similar": SIMILAR_TOTAL_TIMEOUT_S + 60,
                  "scrape": SCRAPE_TOTAL_TIMEOUT_S + 60}.get(mode, RUN_TIMEOUT_S)
+    creds = {"CRAWL_USERNAME": login_user.strip(), "CRAWL_PASSWORD": login_pass} if mode in ("crawl", "browse") and login_user.strip() and login_pass else None
     with st.expander("Live log", expanded=True):
         log_box = st.empty()
         with st.spinner("Running..."):
-            result, lines = run_subprocess(cmd, log_box, timeout_s)
+            result, lines = run_subprocess(cmd, log_box, timeout_s, creds, detach=bool(mode == "crawl" and show_browser))
     request = {"mode": mode, "url": url, "prompt": prompt, "max_steps": steps,
                "headless": headless, "allow_external": external, "max_pages": max_pages,
-               "max_depth": max_depth, "summarize": summarize, "top_n": top_n, "scrape": scrape_opts}
+               "max_depth": max_depth, "summarize": summarize, "top_n": top_n, "scrape": scrape_opts,
+               "login": bool(creds)}
     if result is None:
         st.error("The runner exited without a result. See the log above.")
         save_run(mode, request, None, lines)

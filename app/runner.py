@@ -7,6 +7,7 @@ import app.config as cfg  # noqa: F401  (must come first: enforces telemetry-off
 import argparse
 import asyncio
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -48,14 +49,24 @@ async def run_agent(args, result: dict) -> None:
     tools = Tools(exclude_actions=[a for a in all_actions if a not in tasks.ALLOWED_ACTIONS])
 
     host = urlparse(args.url).hostname
+    # Optional login with the user's own credentials, done here in code: the model never sees the password. The agent's
+    # browser then starts already signed in (it is still told never to log in or submit forms itself).
+    user, pw = os.environ.pop("CRAWL_USERNAME", ""), os.environ.pop("CRAWL_PASSWORD", "")
+    session, start_url = None, args.url
+    if user and pw:
+        from app.crawl import login_session
+        session, start_url = await login_session(args.url, user, pw, headless=args.headless)
+        print("[browse] logged in; the agent starts with the session", flush=True)
+    result["authenticated"] = session is not None
     profile = BrowserProfile(
         headless=args.headless,
         allowed_domains=None if args.allow_external else [host, f"*.{host}"],
         window_size={"width": 1024, "height": 700},
+        **({"storage_state": session} if session else {}),
     )
 
     agent = Agent(
-        task=tasks.browse_task(args.url, args.prompt),
+        task=tasks.browse_task(start_url, args.prompt),
         llm=llm,
         tools=tools,
         browser_profile=profile,
@@ -107,7 +118,10 @@ async def run_crawl(args, result: dict) -> None:
     # Lazy imports: Crawl4AI is only loaded for crawl mode. The crawl itself makes no LLM calls.
     from app.crawl import crawl_site
 
-    crawl = await crawl_site(args.url, args.max_pages, args.max_depth)
+    # Credentials come from the environment, never from argv (argv is visible in process lists and saved reports).
+    user, pw = os.environ.pop("CRAWL_USERNAME", ""), os.environ.pop("CRAWL_PASSWORD", "")
+    crawl = await crawl_site(args.url, args.max_pages, args.max_depth, credentials=(user, pw) if user and pw else None,
+                             show_browser=args.show_browser)
     result.update(crawl)
     if args.summarize and not SETTINGS.askg1_enabled:
         result["summary_note"] = "askg1 summaries skipped: askg1 is not configured in this deployment."
@@ -196,6 +210,7 @@ def parse_args(argv=None):
     p.add_argument("--scrape-pages", type=int, default=None, help="scrape: how many pages or scroll rounds (default 1)")
     p.add_argument("--max-pages", type=int, default=None, help="crawl: page cap (default 20, max 100)")
     p.add_argument("--max-depth", type=int, default=None, help="crawl: link depth (default 2, max 3)")
+    p.add_argument("--show-browser", action="store_true", help="crawl: open a visible browser window (local backend) to watch the crawl")
     p.add_argument("--summarize", action="store_true", help="crawl: askg1 summaries for the first few pages (slow)")
     p.add_argument("--url", default="", help="the start URL (crawl, browse) or the tool's page (similar)")
     p.add_argument("--top", type=int, default=10, help="similar: how many similar tools to list (1 to 10)")
@@ -206,7 +221,14 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
+async def main() -> None:
+    result = await run(parse_args())
+    emit(result)
+    if "app.crawl" in sys.modules:  # a "show browser" crawl keeps its window open after the result is out
+        await sys.modules["app.crawl"].hold_browser()
+
+
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
-    emit(asyncio.run(run(parse_args())))
+    asyncio.run(main())

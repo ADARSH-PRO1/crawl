@@ -5,6 +5,7 @@ robots.txt is honoured, the crawl stays on the start host, rates are low, and pa
 (CAPTCHA, 401/403/429, robots) are reported and skipped, never bypassed.
 """
 import asyncio
+import fnmatch
 import json
 import os
 import re
@@ -12,7 +13,7 @@ import time
 from contextlib import aclosing
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import urlparse
+from urllib.parse import urldefrag, urljoin, urlparse
 
 import httpx
 
@@ -21,8 +22,6 @@ from app.config import (CRAWL_DELAY_SECONDS, CRAWL_MAX_PAGE_CHARS, CRAWL_OUT_DIR
                         CRAWL_TOTAL_TIMEOUT_S, UrlError, avalidate_public_url, clamp_crawl, validate_public_url)
 
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig  # noqa: E402
-from crawl4ai.deep_crawling import (BFSDeepCrawlStrategy, ContentTypeFilter, DomainFilter,  # noqa: E402
-                                          FilterChain)
 
 UA = "askg1-crawler/0.1 (internal prototype; respects robots.txt)"
 VERBOSE = os.environ.get("CRAWL_VERBOSE") == "1"  # per-URL fetch/scrape timing from Crawl4AI, for diagnosing stalls
@@ -115,6 +114,82 @@ def markdown_of(result) -> str:
 
 
 EXCLUDED_TAGS = ["nav", "footer", "aside", "script", "style"]  # PDF 7e: drop navigation and footers
+# A logged-in app keeps its routes in nav/aside sidebars; dropping those tags would also drop the links to follow.
+SESSION_EXCLUDED_TAGS = ["footer", "script", "style"]
+# With a session the crawler acts as the user: never follow links that end it, start OAuth flows or hit API endpoints.
+UNSAFE_URL_GLOBS = ["*logout*", "*log-out*", "*signout*", "*sign-out*", "*/auth/*", "*/api/*"]
+LOGIN_PATHS = ("/login", "/signin", "/sign-in", "/users/sign_in", "/accounts/login", "/user/login")
+_FIELD_SKIP = ":not([type=password]):not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=submit]):not([type=button])"
+
+
+def _host_matches(domain: str, host: str) -> bool:
+    d = domain.lstrip(".").lower()
+    return host == d or host.endswith("." + d)
+
+
+async def login_session(start_url: str, username: str, password: str, headless: bool = True) -> tuple[dict, str]:
+    """Log in with a plain username + password form using the caller's own credentials.
+
+    Returns (Playwright storage state limited to the start host, URL to start crawling from). Looks for a password
+    field on the start URL, then on common login paths of the same host. Anything else (SSO, 2FA, CAPTCHA) is
+    reported as an error, never worked around. The password is only typed into that host's form; it is never logged.
+    """
+    from playwright.async_api import async_playwright
+
+    host = urlparse(start_url).hostname
+    candidates = [start_url] + [f"{urlparse(start_url).scheme}://{urlparse(start_url).netloc}{p}" for p in LOGIN_PATHS]
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=headless, slow_mo=0 if headless else 400)
+        try:
+            ctx = await browser.new_context(user_agent=UA)
+            page = await ctx.new_page()
+            page.set_default_timeout(CRAWL_PAGE_TIMEOUT_MS)
+            found = False
+            for i, cand in enumerate(candidates):
+                try:
+                    await page.goto(cand, wait_until="domcontentloaded")
+                    await page.wait_for_timeout(1000)
+                except Exception:  # noqa: BLE001 - a missing login path is normal; try the next one
+                    continue
+                if urlparse(page.url).hostname != host:
+                    continue
+                if await page.locator("input[type=password]:visible").count():
+                    found, on_start = True, i == 0
+                    break
+            if not found:
+                raise cfg.ConfigError("Login failed: no username/password form was found on this site (SSO, 2FA or a "
+                                      "custom login flow is not supported).")
+            form = page.locator("form:has(input[type=password]:visible)").first
+            user_field = form.locator(f"input:visible{_FIELD_SKIP}").first
+            if not await user_field.count():
+                raise cfg.ConfigError("Login failed: the form has no username field the crawler can fill.")
+            await user_field.fill(username)
+            await form.locator("input[type=password]:visible").first.fill(password)
+            submit = form.locator("button[type=submit], input[type=submit], button:not([type])").first
+            if await submit.count():
+                await submit.click()
+            else:
+                await form.locator("input[type=password]:visible").first.press("Enter")
+            try:
+                await page.wait_for_load_state("networkidle", timeout=10_000)
+            except Exception:  # noqa: BLE001 - some pages never go idle; the checks below decide
+                pass
+            await page.wait_for_timeout(1500)
+            if urlparse(page.url).hostname != host:
+                raise cfg.ConfigError("Login failed: the site sent the login to another host (SSO is not supported).")
+            if await page.locator("input[type=password]:visible").count():
+                raise cfg.ConfigError("Login failed: the site still shows the sign-in form (wrong username or password, "
+                                      "or a CAPTCHA / 2FA step).")
+            landing = page.url
+            state = await ctx.storage_state()
+            if not headless:
+                await page.wait_for_timeout(2500)  # let the user see that the login worked
+        finally:
+            await browser.close()
+    state["cookies"] = [c for c in state.get("cookies", []) if _host_matches(str(c.get("domain", "")), host)]
+    state["origins"] = [o for o in state.get("origins", []) if urlparse(str(o.get("origin", ""))).hostname == host]
+    # If the login form was the start page, crawl from where the login landed; otherwise from the URL the user gave.
+    return state, (landing if on_start else start_url)
 
 
 CRAWL4AI_URL = os.environ.get("CRAWL4AI_URL", "http://127.0.0.1:11235").rstrip("/")
@@ -152,14 +227,16 @@ def _from_api(d: dict) -> SimpleNamespace:
     )
 
 
-async def _docker_results(url: str, pages_cap: int, depth: int, host: str):
+async def _docker_results(url: str, pages_cap: int, depth: int, host: str, session: dict | None = None):
     """Deep crawl through the container's /crawl/stream (NDJSON, one result per page as it completes)."""
     payload = {
         "urls": [url],
-        "browser_config": {"type": "BrowserConfig", "params": {"headless": True}},
+        # The service rejects a storage_state field on untrusted requests, so it is sent only for a session crawl.
+        "browser_config": {"type": "BrowserConfig",
+                           "params": {"headless": True, **({"storage_state": session} if session else {})}},
         "crawler_config": {"type": "CrawlerRunConfig", "params": {
             "cache_mode": "bypass", "check_robots_txt": True, "stream": True,
-            "excluded_tags": EXCLUDED_TAGS,
+            "excluded_tags": SESSION_EXCLUDED_TAGS if session else EXCLUDED_TAGS,
             "remove_overlay_elements": True, "page_timeout": CRAWL_PAGE_TIMEOUT_MS,
             "deep_crawl_strategy": {"type": "BFSDeepCrawlStrategy", "params": {
                 # +1: the container returns nothing at all for max_pages=1; our loop still stops at pages_cap.
@@ -168,6 +245,8 @@ async def _docker_results(url: str, pages_cap: int, depth: int, host: str):
                 "filter_chain": {"type": "FilterChain", "params": {"filters": [
                     {"type": "DomainFilter", "params": {"allowed_domains": [host]}},
                     {"type": "ContentTypeFilter", "params": {"allowed_types": ["text/html"]}},
+                    *([{"type": "URLPatternFilter", "params": {"patterns": UNSAFE_URL_GLOBS, "use_glob": True,
+                                                                 "reverse": True}}] if session else []),
                 ]}}}},
         }},
     }
@@ -187,45 +266,147 @@ async def _docker_results(url: str, pages_cap: int, depth: int, host: str):
                     yield _from_api(d)
 
 
-async def _local_results(url: str, pages_cap: int, depth: int, host: str, delay: float):
-    """Deep crawl with the in-process Crawl4AI library (fallback when no container is running)."""
+PAGE_HARD_TIMEOUT_S = CRAWL_PAGE_TIMEOUT_MS / 1000 + 15
+HOLD_BROWSER_S = 300   # a visible browser stays open this long after the crawl unless the user closes it first
+_HELD = None           # the visible crawler kept open after a "show browser" crawl
+
+
+async def hold_browser(max_seconds: int = HOLD_BROWSER_S) -> None:
+    """Keep the visible browser open for inspection until the user closes the window (or max_seconds), then clean up."""
+    crawler = _HELD
+    if crawler is None:
+        return
+    try:
+        print(f"[crawl] browser stays open so you can look at it; close the window to finish (auto-closes in {max_seconds}s)",
+              flush=True)
+    except (OSError, ValueError):
+        pass  # the UI stopped reading our output; the window still stays open
+    bm = crawler.crawler_strategy.browser_manager
+    t0 = time.time()
+    try:
+        while time.time() - t0 < max_seconds:
+            b = getattr(bm, "browser", None)
+            if b is not None and not b.is_connected():
+                break
+            await asyncio.sleep(1)
+    finally:
+        try:
+            await crawler.close()
+        except Exception:  # noqa: BLE001 - the user may already have closed the window
+            pass
+SKIP_EXT = (".pdf", ".zip", ".gz", ".rar", ".7z", ".exe", ".dmg", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".ico",
+            ".css", ".js", ".json", ".xml", ".mp3", ".mp4", ".avi", ".mov", ".woff", ".woff2", ".ttf", ".csv", ".xlsx", ".docx")
+
+
+def _norm_url(u: str) -> str:
+    """One key per page: no fragment, no trailing slash (so 'site.com' and 'site.com/' are the same page)."""
+    u, _ = urldefrag(u.strip())
+    return u.rstrip("/") if urlparse(u).path in ("", "/") else u
+
+
+def _wanted_link(u: str, host: str, session: bool) -> bool:
+    pu = urlparse(u)
+    if pu.scheme not in ("http", "https") or pu.hostname != host or pu.path.lower().endswith(SKIP_EXT):
+        return False
+    return not (session and any(fnmatch.fnmatch(u.lower(), g) for g in UNSAFE_URL_GLOBS))
+
+
+async def _local_results(url: str, pages_cap: int, depth: int, host: str, delay: float, session: dict | None = None,
+                         headless: bool = True):
+    """Breadth-first crawl on the in-process Crawl4AI library (fallback when no container is running).
+
+    Our own BFS instead of the library's deep-crawl strategy: that one can hang forever on a single page (the page
+    timeout does not always fire), freezing the whole crawl. Here every page has a hard timeout, a stuck page is
+    reported as `timeout` and skipped, and the crawl goes on. One page at a time when the browser is visible.
+    """
+    watch = {} if headless else {"session_id": "watch", "delay_before_return_html": 1.5}  # one stable tab, a pause per page
     run_cfg = CrawlerRunConfig(
-        deep_crawl_strategy=BFSDeepCrawlStrategy(
-            max_depth=depth,
-            max_pages=pages_cap,
-            include_external=False,
-            filter_chain=FilterChain([DomainFilter(allowed_domains=[host]),
-                                      ContentTypeFilter(allowed_types=["text/html"])]),
-        ),
         check_robots_txt=True,            # PDF 7b: respect site rules
-        stream=True,                      # results arrive page by page so the UI can show progress
         cache_mode=CacheMode.BYPASS,
         page_timeout=CRAWL_PAGE_TIMEOUT_MS,
-        mean_delay=delay,
-        semaphore_count=2,                # low concurrency: keep crawl rates low
-        excluded_tags=EXCLUDED_TAGS,
+        excluded_tags=SESSION_EXCLUDED_TAGS if session else EXCLUDED_TAGS,
         remove_overlay_elements=True,
         verbose=VERBOSE,
+        **watch,
     )
-    browser_cfg = BrowserConfig(headless=True, user_agent=UA, verbose=VERBOSE)  # no stealth: we do not evade blocks
-    async with AsyncWebCrawler(config=browser_cfg) as crawler:
-        async for result in await crawler.arun(url=url, config=run_cfg):
-            yield result
+    browser_cfg = BrowserConfig(headless=headless, user_agent=UA, verbose=VERBOSE, storage_state=session)  # no stealth: we do not evade blocks
+    sem = asyncio.Semaphore(2 if headless else 1)  # low concurrency: keep crawl rates low
+
+    global _HELD
+    crawler = AsyncWebCrawler(config=browser_cfg)
+    await crawler.start()
+    try:
+        async def fetch(u: str, d: int):
+            async with sem:
+                await asyncio.sleep(delay)  # PDF: keep crawl rates low
+                try:
+                    r = await asyncio.wait_for(crawler.arun(url=u, config=run_cfg), PAGE_HARD_TIMEOUT_S)
+                except (asyncio.TimeoutError, TimeoutError):
+                    r = SimpleNamespace(url=u, redirected_url=None, success=False, status_code=None,
+                                        error_message="timeout: the page did not finish loading", links={},
+                                        markdown=SimpleNamespace(raw_markdown=""), response_headers={})
+                except Exception as e:  # noqa: BLE001 - one bad page must not end the crawl
+                    r = SimpleNamespace(url=u, redirected_url=None, success=False, status_code=None,
+                                        error_message=f"{type(e).__name__}: {str(e)[:100]}", links={},
+                                        markdown=SimpleNamespace(raw_markdown=""), response_headers={})
+                r.metadata = {**(getattr(r, "metadata", None) or {}), "depth": d}
+                return r
+
+        visited = {_norm_url(url)}
+        level = [url]
+        yielded = 0
+        for d in range(depth + 1):
+            if not level or yielded >= pages_cap:
+                break
+            level = level[:pages_cap - yielded]
+            tasks = [asyncio.create_task(fetch(u, d)) for u in level]
+            nxt: list[str] = []
+            try:
+                for fut in asyncio.as_completed(tasks):
+                    r = await fut
+                    yielded += 1
+                    yield r
+                    if d < depth and r.success:
+                        links = (getattr(r, "links", None) or {}).get("internal", [])
+                        for lk in links:
+                            href = _norm_url(urljoin(r.url, lk.get("href", "") if isinstance(lk, dict) else str(lk)))
+                            if href and href not in visited and _wanted_link(href, host, bool(session)):
+                                visited.add(href)
+                                nxt.append(href)
+            finally:
+                for t in tasks:
+                    t.cancel()
+            level = nxt
+    finally:
+        if headless:
+            await crawler.close()
+        else:
+            _HELD = crawler  # a visible browser stays open after the crawl; hold_browser() closes it later
 
 
 async def crawl_site(url: str, max_pages: int | None = None, max_depth: int | None = None,
-                     out_root: Path | None = None, delay: float = CRAWL_DELAY_SECONDS) -> dict:
-    """Crawl `url` (same host only). Returns a summary dict; files land in <out_dir>/docs_md/."""
+                     out_root: Path | None = None, delay: float = CRAWL_DELAY_SECONDS,
+                     credentials: tuple[str, str] | None = None, show_browser: bool = False) -> dict:
+    """Crawl `url` (same host only). Returns a summary dict; files land in <out_dir>/docs_md/.
+
+    `credentials` = (username, password) of the caller's own account on that site: the crawler logs in once through a
+    plain username/password form and crawls with that session. Without credentials nothing is logged into.
+    """
     t0 = time.time()
     pages_cap, depth = clamp_crawl(max_pages, max_depth)
     await avalidate_public_url(url)
     host = urlparse(url).hostname
+    session = None
+    if credentials and credentials[0] and credentials[1]:
+        session, url = await login_session(url, *credentials, headless=not show_browser)  # raises ConfigError with a clear reason on failure
 
     out_dir = (out_root or CRAWL_OUT_DIR) / f"{time.strftime('%Y%m%d_%H%M%S')}_{re.sub(r'[^a-z0-9.-]', '', host.lower())}"
     md_dir = out_dir / "docs_md"
     md_dir.mkdir(parents=True, exist_ok=True)
 
-    backend = await choose_backend()
+    # The Crawl4AI container refuses cookies / storage_state / headers from API clients, so a logged-in crawl runs on
+    # the in-process library; crawls without credentials keep using the container when it is up.
+    backend = "local" if (session or show_browser) else await choose_backend()  # a visible browser cannot live in the container
     print(f"[crawl] backend: {backend}" + (f" ({CRAWL4AI_URL})" if backend == "docker" else " (in-process library)"),
           flush=True)
 
@@ -264,7 +445,8 @@ async def crawl_site(url: str, max_pages: int | None = None, max_depth: int | No
             elif not md:
                 skipped.append({"url": result.url, "reason": "empty_page"})
             elif looks_login(md):
-                skipped.append({"url": result.url, "reason": "login_required (the crawler does not log in); page is a sign-in form"})
+                why = "login did not reach this page" if session else "no credentials supplied"
+                skipped.append({"url": result.url, "reason": f"login_required ({why}); page is a sign-in form"})
             elif looks_blocked(md):
                 skipped.append({"url": result.url, "reason": "blocked_by_site (CAPTCHA / bot wall detected; not bypassed)"})
             else:
@@ -280,8 +462,9 @@ async def crawl_site(url: str, max_pages: int | None = None, max_depth: int | No
         log(f"{seen}/{pages_cap} skipped {result.url}: {skipped[-1]['reason']}")
 
     timed_out = False
-    results = (_docker_results(url, pages_cap, depth, host) if backend == "docker"
-               else _local_results(url, pages_cap, depth, host, delay))
+    log("logged in; crawling with the session" if session else "no credentials (public pages only)")
+    results = (_docker_results(url, pages_cap, depth, host, session) if backend == "docker"
+               else _local_results(url, pages_cap, depth, host, delay, session, headless=not show_browser))
     try:
         # Overall budget: any site can stall (slow servers, endless redirects); return what we have.
         async with asyncio.timeout(CRAWL_TOTAL_TIMEOUT_S), aclosing(results) as stream:
@@ -303,4 +486,5 @@ async def crawl_site(url: str, max_pages: int | None = None, max_depth: int | No
         "start_url": url, "host": host, "out_dir": str(out_dir), "pages": pages, "skipped": skipped,
         "pages_ok": len(pages), "pages_skipped": len(skipped), "max_pages": pages_cap, "max_depth": depth,
         "crawl_seconds": round(time.time() - t0, 1), "timed_out": timed_out, "backend": backend, "ok": bool(pages),
+        "authenticated": session is not None,
     }
