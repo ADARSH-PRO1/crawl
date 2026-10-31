@@ -1,0 +1,51 @@
+:root { --green: #059669; --ink: #111827; --muted: #6b7280; --line: #e5e7eb; --bg: #f9fafb; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); background: #fff; display: flex; flex-direction: column; height: 100vh; }
+.top { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; background: #ecfdf5; border-bottom: 1px solid var(--line); }
+.brand { font-weight: 700; font-size: 16px; display: flex; align-items: center; gap: 8px; }
+.logo { background: var(--green); color: #fff; width: 22px; height: 22px; border-radius: 5px; display: inline-grid; place-items: center; font-size: 14px; }
+.stats { display: flex; gap: 0; }
+.stats div { padding: 0 16px; border-left: 1px solid var(--line); display: flex; flex-direction: column; }
+.stats .k { font-size: 11px; color: var(--muted); }
+.stats .v { font-weight: 700; font-size: 16px; }
+.page-info { padding: 10px 16px; border-bottom: 1px solid var(--line); }
+.page-title { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.page-url { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.message { margin: 16px; padding: 14px 16px; border-radius: 8px; background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
+.message.info { background: #eff6ff; border-color: #bfdbfe; color: #1e3a8a; }
+.bar { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.spacer { flex: 1; }
+button, select { font: inherit; padding: 6px 12px; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; color: var(--ink); cursor: pointer; }
+button:hover:not(:disabled) { background: var(--bg); }
+button:disabled { opacity: 0.45; cursor: default; }
+button.primary { background: var(--green); border-color: var(--green); color: #fff; font-weight: 600; }
+button.primary:hover:not(:disabled) { background: #047857; }
+.loadbar label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.loadbar input[type=text] { font: inherit; padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 6px; min-width: 260px; }
+.loadbar input[type=number] { font: inherit; padding: 6px 4px; border: 1px solid #d1d5db; border-radius: 6px; width: 56px; }
+.load-status { font-size: 12px; color: var(--muted); }
+.hidden-cols { padding: 6px 16px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
+.hidden-cols button { padding: 2px 8px; font-size: 12px; margin-left: 6px; }
+.grid-wrap { flex: 1; overflow: auto; }
+table { border-collapse: collapse; width: max-content; min-width: 100%; }
+th, td { border: 1px solid var(--line); padding: 4px 8px; max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+th { position: sticky; top: 0; background: var(--bg); z-index: 1; font-weight: 600; }
+th .head { display: flex; align-items: center; gap: 4px; }
+th input { border: 0; background: transparent; font: inherit; font-weight: 600; min-width: 70px; width: 100%; padding: 2px; }
+th input:focus { outline: 2px solid var(--green); background: #fff; }
+th .x { border: 0; background: transparent; color: var(--muted); padding: 0 4px; font-size: 16px; line-height: 1; }
+th .x:hover { color: #b91c1c; }
+td.num, th.num { color: var(--muted); text-align: right; background: var(--bg); width: 1%; }
+.foot { padding: 6px 16px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); }
+/* Narrow screens (Firefox for Android opens this as a tab): stack the header, let the bars wrap, bigger touch targets. */
+@media (max-width: 640px) {
+  .top { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .stats div:first-child { border-left: 0; padding-left: 0; }
+  .stats div { padding: 0 12px; }
+  .bar { padding: 8px 10px; }
+  .spacer { display: none; }
+  .loadbar input[type=text] { min-width: 0; width: 100%; }
+  .page-info, .hidden-cols, .foot { padding-left: 10px; padding-right: 10px; }
+  button, select { min-height: 38px; }
+}

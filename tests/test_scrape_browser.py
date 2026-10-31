@@ -88,3 +88,31 @@ def test_detector_skips_a_disabled_next_button_and_finds_a_custom_selector(chrom
     assert run_action(chromium_page, LOAD_MORE_PAGE % '<button disabled>Next</button>', "next")["acted"] is False
     custom = LOAD_MORE_PAGE % "<div id=go role=button onclick=\"document.title='clicked'\">Go on</div>"
     assert run_action(chromium_page, custom, "next", "#go")["acted"] is True and chromium_page.title() == "clicked"
+
+
+# ---- rows whose first link sits a little differently must not be dropped --------------------------------------------
+def _rows(n, shifted=()):
+    out = []
+    for i in range(1, n + 1):
+        pad = '<span style="display:inline-block;width:34px"></span>' if i in shifted else ""
+        out.append(f'<tr><td>{i}</td><td>{pad}<a href="/c/{i}">Country {i}</a></td><td>{i * 100}</td></tr>')
+    return "<table><tbody>" + "".join(out) + "</tbody></table>"
+
+
+def test_rows_with_a_shifted_first_link_are_kept(chromium_page):
+    """A flag icon or longer label moves the first link; those rows used to vanish from the table."""
+    data = run_detector(chromium_page, _rows(20, shifted={3, 9, 14}))
+    best = scrape.table_of(data["lists"][0])
+    assert len(best["rows"]) == 20
+    assert {r["a"] for r in best["rows"]} >= {"Country 3", "Country 9", "Country 14"}
+
+
+def test_rows_of_other_shapes_are_not_pulled_in(chromium_page):
+    """Hacker News style: story rows, detail rows and spacers alternate. Only the story rows are the list."""
+    rows = "".join(
+        f'<tr class="story"><td>{i}.</td><td><a href="/s/{i}">Story {i}</a></td><td>site</td></tr>'
+        f'<tr><td></td><td>{i * 10} points by user{i}</td></tr><tr class="gap"><td></td></tr>'
+        for i in range(1, 8))
+    data = run_detector(chromium_page, f"<table><tbody>{rows}</tbody></table>")
+    best = scrape.table_of(data["lists"][0])
+    assert len(best["rows"]) == 7 and best["rows"][0]["a"] == "Story 1"

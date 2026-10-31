@@ -7,3 +7,6 @@ __pycache__/
 # Reports, crawl output and run logs stay local: they contain internal endpoints and crawled content.
 reports/
 session*.json
+
+# Built browser extension (rebuilt by scripts/build_extension.py)
+dist/

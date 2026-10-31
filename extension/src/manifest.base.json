@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "bizfy Scraper",
+  "version": "0.1.0",
+  "description": "Scrape any list on the page you are looking at into a table. One click, no code, nothing leaves your browser.",
+  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "action": {
+    "default_title": "bizfy Scraper: scrape the list on this page",
+    "default_icon": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png" }
+  },
+  "permissions": ["activeTab", "scripting", "storage"],
+  "optional_host_permissions": ["*://*/*"],
+  "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'self'" }
+}

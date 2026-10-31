@@ -115,6 +115,41 @@ python -u -m app.runner --mode scrape --url <url> --save-template shop          
 - Limits: it runs in a separate crawler, not in your logged-in browser tab, so login-only or bot-protected pages are reported, not bypassed.
   Rows whose data sits in a sibling element (Hacker News keeps points and comments in the next table row) are not merged.
 
+## Browser extension, bizfy Scraper (phases 1-5 of `reports/EXTENSION_PLAN.md`)
+Easy Scraper's flow inside the user's own browser tab: click the toolbar icon on any page, get its main list as a table, hide or
+rename columns, copy, download CSV or JSON. It reads the page the user is already looking at, so login-only and bot-protected pages
+work without an HTML upload, and nothing is sent anywhere. One source tree builds two packages: **Chromium** (Chrome, Edge, Brave,
+Opera, Vivaldi, Arc) and **Firefox** (140+, Android 142+). Safari comes last. The list detector is the same file the crawler uses
+(`app/scrape_detect.js`, copied into the build as `detect.js`), so the app and the extension find the same lists.
+```powershell
+python scripts/build_extension.py            # dist/chromium and dist/firefox
+python scripts/build_extension.py --zip      # also store-ready zips in dist/
+npx web-ext lint --source-dir dist/firefox   # Firefox manifest check (0 errors, 0 warnings)
+```
+Install for a try-out: Chrome or Edge, `chrome://extensions` > Developer mode > Load unpacked > `dist/chromium`; Firefox,
+`about:debugging` > This Firefox > Load Temporary Add-on > `dist/firefox/manifest.json`. Permissions: `activeTab`, `scripting`,
+`storage` only, plus an optional per-site access request that appears only when "Click next page" is used.
+"Action to load more items" (None / Scroll down / Click next page / Click load more, optional CSS selector, Pages 1-20) ports the app's
+`load_more()` loop: duplicate rows are dropped, it stops when nothing new arrives or at 2000 rows / 20 pages / 7 minutes, waits 1 s
+between steps, and never follows a link to another site (a redirect off the site also stops it). The tab stays on the last page it opened.
+**Scrape each URL** opens the linked pages of the list (same site only, max 30 unique, 2 at a time, 1 s apart) in background tabs of
+your own browser, so JavaScript pages and login-only pages work, adds title / heading / description / image / labelled values / text start as
+columns and closes each tab again; a page that looks like a login wall or bot check is reported and skipped, never worked around. **Page details**
+shows the same facts for the page itself as one row.
+**Templates:** "Save as template" remembers the chosen list's selector, the load-more choice and the kept / renamed columns for the site (selectors
+and names only, never page content) in the browser's own storage; the newest one is applied when you open that site again, and "None" detects the
+list afresh. If a saved selector matches nothing any more the list is detected again and a note says so. Export / Import use the app's own
+`scrape_templates.json` format, so files move both ways; an imported file is validated entry by entry. The Pages and Max URLs numbers are remembered.
+**Packaging (phase 5):** `python scripts/build_extension.py --zip` writes the Chromium zip (Chrome and Edge) and the Firefox zip; tests check that a zip
+has the manifest at its root, no test-only permission, a strict extension-pages CSP, and that the shipped code makes no network calls and loads no
+remote code. `python scripts/bump_extension_version.py 1.0.0` sets the version in one place. `python scripts/make_store_assets.py` makes the store
+screenshots and tile from local sample pages. Store text, permission justifications and the privacy policy are in `extension/store/LISTING.md` and
+`extension/PRIVACY.md`; `extension/MANUAL_TEST.md` is the checklist for what a script cannot test. **Safari (phase 6)** is written up in
+`extension/SAFARI.md` but not built: it needs a Mac with Xcode and an Apple Developer account.
+Still to do by hand: the real icon artwork, a permanent Firefox add-on id, the contact email in the privacy policy, and the manual checks.
+`tests/test_extension.py` loads the unpacked extension into Chromium and checks it end to end; Firefox gets the lint check and a
+manual run (Firefox is not installed on the development machine).
+
 ## Rules enforced in code
 Same-host crawl only, `robots.txt` honoured, page and depth caps (default 20 pages / depth 2, max 100 / 3), 2 concurrent pages,
 overall time budget, pages behind CAPTCHA / 401 / 403 / 429 are reported and skipped (never bypassed), private and non-public

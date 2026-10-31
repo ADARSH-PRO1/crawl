@@ -47,6 +47,12 @@
     const ar = a.getBoundingClientRect();
     return bucket(ar.x - ir.x) + "," + bucket(ar.y - ir.y);
   };
+  // Horizontal position only. The vertical offset changes with the window width (text wraps, rows grow), which made a
+  // wide table lose a third of its rows in a bigger window; the column a link sits in does not move.
+  const linkXSig = (item) => {
+    const a = Array.from(item.querySelectorAll("a[href]")).find(visible);
+    return a ? String(bucket(a.getBoundingClientRect().x - item.getBoundingClientRect().x)) : null;
+  };
   const classSig = (item) => (item.className && typeof item.className === "string" ? item.className.trim().split(/\s+/).sort().join(".") : null);
   const shapeSig = (item) => Array.from(item.children).map((c) => c.tagName).join(">") || null;
   const commonSigs = (items, sigFn) => {
@@ -55,8 +61,22 @@
     return new Set(Object.keys(counts).filter((s) => counts[s] > 1 && counts[s] / items.length >= 0.3));
   };
   const filterBy = (items, sigFn, keep) => items.filter((i) => keep.has(sigFn(i)));
-  const similarItems = (items) => {
-    const byLink = filterBy(items, linkSig, commonSigs(items, linkSig));
+  // The position of the first link is a weak clue (a flag icon or a longer name moves it). When most rows share the same
+  // inner structure and the clue-based result is a clearly smaller part of that group, take the whole group.
+  const widen = (items, picked) => {
+    const counts = {};
+    items.forEach((i) => { const s = shapeSig(i); if (s) counts[s] = (counts[s] || 0) + 1; });
+    const mode = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
+    if (!mode || counts[mode] < 0.6 * items.length) return picked;
+    const group = items.filter((i) => shapeSig(i) === mode);
+    const inside = picked.filter((i) => shapeSig(i) === mode).length;
+    return group.length > picked.length * 1.05 && inside >= 0.9 * picked.length ? group : picked;
+  };
+  const similarItems = (items) => widen(items, pickSimilar(items));
+  const pickSimilar = (items) => {
+    const byLinkXY = filterBy(items, linkSig, commonSigs(items, linkSig));
+    const byLinkX = filterBy(items, linkXSig, commonSigs(items, linkXSig));
+    const byLink = byLinkX.length > byLinkXY.length ? byLinkX : byLinkXY;
     const byClass = filterBy(items, classSig, commonSigs(items, classSig));
     // The class filter is the designer's own grouping: prefer it unless the link filter finds far more items.
     if (byClass.length >= MIN_ITEMS && byClass.length >= 0.4 * byLink.length) return byClass;
@@ -156,7 +176,12 @@
   let result;
   try {
     if (args.itemsSelector) {
-      const items = Array.from(document.querySelectorAll(args.itemsSelector)).filter(isItem);
+      let items = Array.from(document.querySelectorAll(args.itemsSelector)).filter(isItem);
+      if (items.length) {
+        // "parent > tag" also matches spacer and sub-rows (Hacker News): apply the same similar-items filter as detection.
+        const similar = similarItems(candidateItems(parentOf(items)));
+        if (similar.length >= MIN_ITEMS && similar.every((i) => items.includes(i))) items = similar;
+      }
       result = { ok: true, lists: items.length ? [Object.assign(describe(items), { score: 1 })] : [] };
     } else {
       const found = [];
@@ -204,6 +229,8 @@
   };
 
   const publish = (result) => {
+    // The browser extension passes a callback and gets the result directly; the crawler reads the node below.
+    if (typeof args.onResult === "function") { args.onResult(result); return; }
     const old = document.getElementById("__scrape_result");
     if (old) old.remove();
     const node = document.createElement("script");
@@ -221,7 +248,7 @@
     for (let t = 0; t < limit && snapshot() === before; t += 250) await sleep(250);
     await sleep(400);
   };
-  const NEXT_RE = /^(next|next page|older|older posts|›|»|>|→)$/i;
+  const NEXT_RE = /^(next( page)?|older( posts)?)\s*[→›»>]*$|^[›»>→]$/i; // "Next", "Next →", "Next page »", "→"
   const MORE_RE = /^(load more|show more|view more|see more|more|more results|load more results)$/i;
   const disabled = (el) => el.disabled || el.getAttribute("aria-disabled") === "true" || /\bdisabled\b/i.test(el.className || "");
   const labelOf = (el) => (el.innerText || el.getAttribute("aria-label") || el.getAttribute("title") || "").trim();

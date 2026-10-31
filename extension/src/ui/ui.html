@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>bizfy Scraper</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="logo">&#x2193;</span> bizfy Scraper</div>
+    <div class="stats">
+      <div><span class="k">Pages</span><span class="v" id="stat-pages">1</span></div>
+      <div><span class="k">Items</span><span class="v" id="stat-items">0</span></div>
+      <div><span class="k">Columns</span><span class="v" id="stat-cols">0</span></div>
+      <div><span class="k">Duration</span><span class="v" id="stat-time">00:00</span></div>
+    </div>
+  </header>
+
+  <section class="page-info">
+    <div class="page-title" id="page-title">Reading the page...</div>
+    <div class="page-url" id="page-url"></div>
+  </section>
+
+  <div id="message" class="message" hidden></div>
+
+  <section class="bar" id="bar" hidden>
+    <button id="btn-list" type="button" title="Pick another list found on this page">Change list</button>
+    <select id="list-select" hidden aria-label="Detected lists"></select>
+    <button id="btn-rescan" type="button" title="Read the page again">Rescan</button>
+    <button id="btn-page" type="button" title="Show the key facts of the page itself as one row">Page details</button>
+    <span class="spacer"></span>
+    <button id="btn-copy" type="button" class="primary">Copy</button>
+    <button id="btn-csv" type="button" class="primary">Download CSV</button>
+    <button id="btn-json" type="button" class="primary">Download JSON</button>
+  </section>
+
+  <section class="bar loadbar" id="loadbar" hidden>
+    <label>Action to load more items
+      <select id="action">
+        <option value="none">None</option>
+        <option value="scroll">Scroll down</option>
+        <option value="next">Click next page</option>
+        <option value="more">Click load more</option>
+      </select>
+    </label>
+    <input id="action-selector" type="text" hidden aria-label="CSS selector of the button" placeholder="CSS selector of the button (optional)">
+    <label>Pages <input id="pages" type="number" min="1" max="20" value="5"></label>
+    <button id="btn-load" type="button" class="primary" disabled>Load more rows</button>
+    <button id="btn-stop" type="button" hidden>Stop</button>
+    <span class="load-status" id="load-status" role="status"></span>
+  </section>
+
+  <section class="bar loadbar" id="detailbar" hidden>
+    <label>Link column
+      <select id="url-col" aria-label="Column with the links to open"></select>
+    </label>
+    <label>Max URLs <input id="max-urls" type="number" min="1" max="30" value="10"></label>
+    <button id="btn-details" type="button" class="primary" title="Open each linked page of this site and add its details as columns">Scrape each URL</button>
+  </section>
+
+  <section class="bar loadbar" id="tplbar" hidden>
+    <label>Template
+      <select id="tpl-select" aria-label="Saved templates for this site"></select>
+    </label>
+    <input id="tpl-name" type="text" maxlength="40" placeholder="Name for a new template" aria-label="Template name">
+    <button id="btn-tpl-save" type="button" title="Remember this list, its columns and the load-more choice for this site">Save as template</button>
+    <button id="btn-tpl-delete" type="button" disabled>Delete</button>
+    <span class="spacer"></span>
+    <button id="btn-tpl-export" type="button" title="Save all templates to a file (the same format the app uses)">Export templates</button>
+    <button id="btn-tpl-import" type="button" title="Add templates from a file">Import templates</button>
+    <input id="tpl-file" type="file" accept=".json,application/json" hidden>
+  </section>
+
+  <div class="hidden-cols" id="hidden-cols" hidden></div>
+
+  <main class="grid-wrap" id="grid-wrap" hidden>
+    <table id="grid"><thead></thead><tbody></tbody></table>
+  </main>
+
+  <footer class="foot">Everything stays in your browser. Nothing is sent anywhere.</footer>
+  <script type="module" src="ui.js"></script>
+</body>
+</html>
